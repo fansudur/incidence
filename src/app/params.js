@@ -37,7 +37,7 @@ export const PARAM_SCHEMA = [
     { key: 'showScenery', label: '测试布景 (红绿蓝/层)', type: 'bool', def: true },
     { key: 'showWall', label: '观影墙 (沉浸遮挡)', type: 'bool', def: true },
     { key: 'realMirror', label: '真实反射 (Reflector·实时)', type: 'bool', def: false, ref: 'realMirror' },
-    { key: 'pathTrace', label: '路径追踪 (高保真·渐进)', type: 'bool', def: false, ref: 'pathTrace' },
+    { key: 'pathTrace', label: '路径追踪 (高保真·渐进)', type: 'bool', def: true, ref: 'pathTrace' },
   ] },
   { folder: '路径追踪精度 (开路径追踪后生效)', items: [
     { key: 'ptScale', label: '渲染分辨率 (低=糊但快)', type: 'num', min: 0.25, max: 1, step: 0.05, def: 1, ref: 'ptScale', note: '★模糊主因: 0.5=半分辨率上采样→糊; 1=全分辨率最清晰(更吃 GPU)' },

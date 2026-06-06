@@ -294,6 +294,9 @@ vf.add(viewState, 'multi').name('三视口 (透视+顶+正)').onChange(v => {
   else { controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false; renderer.domElement.style.cursor = ''; persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix(); renderer.setViewport(0, 0, innerWidth, innerHeight); }
 });
 
+// 默认进入 Σ·观影位 (路径追踪在 params 里默认开) — 落地即影院视角看合成反射画面
+setView('Σ眼');
+
 // ---- 主循环 ------------------------------------------------------------------
 const clock = new THREE.Clock();
 function animate() {
