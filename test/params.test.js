@@ -17,6 +17,7 @@ test('schema 每项格式合法', () => {
       assert(it.key && it.type, `每项需 key+type: ${JSON.stringify(it)}`);
       if (it.type === 'vec3') assert(Array.isArray(it.def) && it.def.length === 3 && it.sub && it.sub.length === 3, `vec3 需 def[3]+sub[3]: ${it.key}`);
       else if (it.type === 'bool') assert(typeof it.def === 'boolean', `bool def: ${it.key}`);
+      else if (it.type === 'color') assert(typeof it.def === 'string' && /^#[0-9a-fA-F]{6}$/.test(it.def), `color def 需 #rrggbb: ${it.key}`);
       else assert(typeof it.def === 'number' && it.min <= it.max, `num/int 范围: ${it.key}`);
     }
 });

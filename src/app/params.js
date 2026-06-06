@@ -14,6 +14,13 @@ export const PARAM_SCHEMA = [
     { key: 'frameH', label: '取景框高', type: 'num', min: 10, max: 600, step: 1, def: 40, gh: null, note: '猜测值, 待核对宽高比' },
     { key: 'wallSize', label: '观影墙大小 (×框)', type: 'num', min: 2, max: 30, step: 0.5, def: 8, note: '观影墙相对取景框的放大倍数; 中间挖框大小的洞' },
   ] },
+  { folder: '环境 (天空·太阳)', items: [
+    { key: 'sunAz', label: '太阳方位角°', type: 'num', min: 0, max: 360, step: 1, def: 135, ref: 'sunAz', note: '绕 Y 轴, 决定阳光从哪个水平方向来 (各镜面层受光面随之不同)' },
+    { key: 'sunEl', label: '太阳高度角°', type: 'num', min: -5, max: 90, step: 1, def: 48, ref: 'sunEl', note: '太阳离地平线的高度; 低=长影暖光, 高=顶光' },
+    { key: 'sunIntensity', label: '太阳强度', type: 'num', min: 0, max: 6, step: 0.1, def: 2.6, ref: 'sunIntensity' },
+    { key: 'skyTop', label: '天空顶色', type: 'color', def: '#4a78b8', ref: 'skyTop' },
+    { key: 'skyHorizon', label: '地平线色', type: 'color', def: '#d8c4a8', ref: 'skyHorizon' },
+  ] },
   { folder: '多世界 (一生二三)', items: [
     { key: 'worldCount', label: '世界数 N', type: 'int', min: 1, max: 6, step: 1, def: 1, gh: '8/11', note: 'N=2→C₂; N=3→C₃' },
   ] },

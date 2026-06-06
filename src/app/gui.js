@@ -13,6 +13,9 @@ export function buildGui(params, schema, onChange, title = '装置参数 (原始
       } else if (it.type === 'bool') {                // 复选框
         const c = f.add(params, it.key).name(it.label).onChange(onChange);
         if (it.ref) ctrls[it.ref] = c;
+      } else if (it.type === 'color') {               // 颜色选择器 (值为 '#rrggbb')
+        const c = f.addColor(params, it.key).name(it.label).onChange(onChange);
+        if (it.ref) ctrls[it.ref] = c;
       } else {                                        // num / int → 滑块
         const c = f.add(params, it.key, it.min, it.max, it.step).name(it.label).onChange(onChange);
         if (it.ref) ctrls[it.ref] = c;
