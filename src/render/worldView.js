@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors } from '../core/activity.js';
-import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector } from './builders.js';
+import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
 // 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug }。
@@ -51,6 +51,13 @@ function buildSingleWorld(params, base = 0) {
   if (params.showGrid && !bug && data.planes.length) {
     const secs = projectGrid(data.seed, data.frame, data.planes, 3).map(cs => cs.map(V3));
     root.add(buildProjGrid(secs, 4, 0x4a90d0));
+  }
+
+  // 层地面(倾斜): 每段锥的底面四边形 = 该层活动区的地面 (视锥底边发散 → 朝远处向下倾斜); 按层色着色, 人/物将站这上面
+  if (params.showFloor && !bug && mc.length >= 2) {
+    const floorCol = [0xff6a6a, 0x6aff8a, 0x6ab4ff];
+    for (let gp = 0; gp < mc.length - 1; gp++)
+      root.add(buildFloor([mc[gp][2], mc[gp][3], mc[gp + 1][3], mc[gp + 1][2]], floorCol[gp % 3]));
   }
 
   // 测试布景: 每层活动区中央放红/绿/蓝标记 (Σ 反射看到什么的地基; 真实反射接入后会被折叠合成)
