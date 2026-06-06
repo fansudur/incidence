@@ -1,0 +1,13 @@
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+.vscode/
+.idea/
+
+# 渲染产物 / 大文件(art archive 留在仓库外, 防误入)
+*.bmp
+*.mp4
+*.exr

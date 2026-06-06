@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>镜面反射装置 · Web (变体3 / 3-9) — 真实尺度</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07090d; }
+  #info {
+    position: fixed; left: 12px; top: 10px; z-index: 10;
+    font: 12px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #aeb6c2; text-shadow: 0 1px 2px #000; pointer-events: none; max-width: 360px;
+  }
+  #info b { color: #fff; }
+  #info .r { color: #ff5a5a; } #info .g { color: #59e07a; } #info .b { color: #5aa6ff; }
+  #info .ray { color: #ffd070; } #info .box { color: #ffd700; } #info .dim { color: #7f8a99; }
+  #warn {
+    position: fixed; left: 12px; bottom: 12px; z-index: 10;
+    font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #ff5ad0; text-shadow: 0 1px 2px #000; pointer-events: none; display: none; max-width: 60%;
+  }
+</style>
+</head>
+<body>
+<div id="info">
+  <b>镜面反射装置</b> — 视锥追迹 · 真实尺度<br/>
+  Σ → F 四角发散视锥 → M₁/M₂/M₃ (各自角度/间距)，<span class="ray">镜面=视锥截面</span><br/>
+  随距离放大：<span class="r">W₁红</span> · <span class="g">W₂绿</span> · <span class="b">W₃蓝</span>；<span class="box">黄框=布景范围</span><br/>
+  <span class="dim">尺寸 = .gh 原始单位 (网格 1 格 = 100)</span> · 拖拽旋转 / 滚轮缩放 / 右键平移
+</div>
+<div id="warn"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/",
+    "three/examples/jsm/": "./vendor/addons/",
+    "three-mesh-bvh": "./vendor/three-mesh-bvh.module.js",
+    "three-gpu-pathtracer": "./vendor/three-gpu-pathtracer.module.js",
+    "lil-gui": "./vendor/lil-gui.esm.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { PARAM_SCHEMA, defaultParams } from './src/app/params.js';
+import { buildGui } from './src/app/gui.js';
+import { createScene } from './src/render/scene.js';
+import { buildAllWorlds } from './src/render/worldView.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // 三视口的正交视口各自一套控制器
+
+/* ============================================================================
+   镜面反射装置 — 视锥追迹 · 真实尺度 (来源: Grasshopper 3-9.gh, 变体3)
+   尺寸用 .gh 原始单位; 内部除以 U=100 保持渲染坐标舒适 (纯比例缩放, 形状不变)。
+   ★ 滑块→尺寸的映射是【推断】, 默认值为最可能假设, 以几何对错为准, 作者可逐个改。
+     默认: Σ→F=170(#4), 框 60×40(#5), Σ→M₁=550(#14), M₁→M₂=M₂→M₃=277 → Σ→M₃≈1104(#6)
+
+   架构(系统架构文档): CORE(src/core 纯数学·零 three) / RENDER(src/render·three) / APP(src/app schema→GUI)。
+   本文件 = 装配入口: 建场景 → 建世界 → GUI → 主循环。改几何去 core/, 改外观去 render/。
+   ============================================================================ */
+
+const params = defaultParams(); // 初始参数(默认值)由 src/app/params.js 的 schema 生成
+
+let currentView = '透视';                                        // 单视口的当前视图预设
+const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5 }; // 模型升高 / 三视口开关 / 左右·上下分隔比例
+
+const { renderer, scene, controls, persp, ortho, eyeCam, getCamera, useCamera } = createScene(); // 透视+正交+Σ眼 三相机 → src/render/scene.js
+const vpTop = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 5000);   // 三视口·顶视
+const vpFront = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 5000); // 三视口·正视
+const ctrlTop = new OrbitControls(vpTop, renderer.domElement); ctrlTop.enableDamping = true; ctrlTop.enabled = false;     // 顶视口控制器(按鼠标位置启停)
+const ctrlFront = new OrbitControls(vpFront, renderer.domElement); ctrlFront.enableDamping = true; ctrlFront.enabled = false; // 正视口控制器
+
+// ---- 路径追踪 (高保真·渐进; three-gpu-pathtracer 按需动态加载, 不拖累默认载入) ----
+let WebGLPathTracer = null, pathTracer = null, ptReady = false;
+async function preparePT() { // 路径追踪: 库按需加载; 场景/相机变化时(重)建; 主循环 renderSample 渐进累积
+  ptReady = false;
+  try {
+    if (!WebGLPathTracer) ({ WebGLPathTracer } = await import('three-gpu-pathtracer'));
+    if (!pathTracer) pathTracer = new WebGLPathTracer(renderer);
+    pathTracer.renderScale = params.ptScale;   // 分辨率(模糊主因, 默认 1=全分辨率); 由「路径追踪精度」滑块控制
+    pathTracer.bounces = params.ptBounces;      // 光线反弹次数(嵌套镜子看深层反射需更多)
+    const savedEnv = scene.environment; // ★PMREM 立方图与 PT 的 equirect 环境处理不兼容 → setScene 时暂置空, 之后恢复给光栅
+    scene.environment = null;
+    try { await pathTracer.setScene(scene, getCamera()); } finally { scene.environment = savedEnv; }
+    ptReady = true;
+  } catch (e) { console.warn('路径追踪初始化失败:', e); }
+}
+controls.addEventListener('change', () => { if (params.pathTrace && pathTracer) pathTracer.updateCamera(); }); // 相机真动了才重置累积(不每帧重置)
+
+// ---- 重建 + 取景 + 警告 ------------------------------------------------------
+const warnEl = document.querySelector('#warn');
+let worldGroup = null, framed = false;
+function rebuild() {
+  if (worldGroup) {
+    scene.remove(worldGroup);
+    worldGroup.traverse(o => { o.geometry?.dispose?.(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
+  }
+  const { group, bugLayer } = buildAllWorlds(params); // 视锥追迹建世界 → src/render/worldView.js
+  worldGroup = group;
+  worldGroup.position.y = viewState.lift; // 抬高整体模型, 脱离地面网格
+  scene.add(worldGroup);
+  const msgs = [];
+  if (bugLayer) msgs.push(`第 ${bugLayer} 层穿帮（角光线越过镜面边界 → 光路丢失）`);
+  warnEl.style.display = msgs.length ? 'block' : 'none';
+  warnEl.textContent = msgs.length ? '⚠ ' + msgs.join('；') : '';
+  if (!framed) { setView(currentView); framed = true; }
+  if (viewState.multi) frameViewports();
+  updateSeedVisibility();
+  if (params.pathTrace) preparePT(); else ptReady = false; // 几何变了 → 重建路径追踪 BVH
+}
+// 视图预设: 透视(perspective) / 轴测·正视·顶视·侧视(正交 orthographic)。按模型包围盒取景。
+function setView(name) {
+  if (!worldGroup) return;
+  if (name === 'Σ眼') { // 观者所见: eyeCam 在 Σ、透过取景框 F 朝 M₁ (fov 由 F 张角定); U=100
+    currentView = name;
+    if (suppressScaffold()) rebuild(); // 观影位也关黄红脚手架(rebuild 移除其 mesh; framed 已 true 不会再切视图)
+    const lift = viewState.lift, fd = params.fDist / 100;
+    eyeCam.fov = THREE.MathUtils.radToDeg(2 * Math.atan((params.frameH / 2) / params.fDist)) * 1.25; // 略宽于 F → 看到一圈暗墙(影院感)
+    eyeCam.position.set(0, lift, 0); eyeCam.up.set(0, 1, 0); eyeCam.lookAt(fd, lift, 0);
+    eyeCam.updateProjectionMatrix();
+    useCamera(eyeCam); controls.target.set(fd, lift, 0); controls.update();
+    updateSeedVisibility();
+    if (params.pathTrace) preparePT();
+    return;
+  }
+  const box = new THREE.Box3().setFromObject(worldGroup);
+  if (box.isEmpty()) return;
+  const sph = box.getBoundingSphere(new THREE.Sphere());
+  const c = sph.center, R = sph.radius || 1;
+  const P = {
+    透视: { cam: persp, dir: [0.55, 0.5, 1], up: [0, 1, 0] },
+    轴测: { cam: ortho, dir: [1, 0.8, 1], up: [0, 1, 0] },
+    正视: { cam: ortho, dir: [0, 0, 1], up: [0, 1, 0] },     // 沿 −Z 看(正面)
+    顶视: { cam: ortho, dir: [0, 1, 0.001], up: [0, 0, -1] }, // 俯视
+    侧视: { cam: ortho, dir: [1, 0, 0], up: [0, 1, 0] },      // 沿 −X 看(侧面)
+  }[name];
+  if (!P) return;
+  currentView = name;
+  const cam = P.cam, dir = new THREE.Vector3(...P.dir).normalize();
+  cam.up.set(...P.up);
+  if (cam.isOrthographicCamera) {
+    const a = innerWidth / innerHeight, m = R * 1.15;
+    cam.left = -m * a; cam.right = m * a; cam.top = m; cam.bottom = -m;
+    cam.near = 0.01; cam.far = R * 40;
+    cam.position.copy(c).add(dir.multiplyScalar(R * 8));
+  } else {
+    const dist = (R / Math.sin(cam.fov * Math.PI / 360)) * 1.25;
+    cam.position.copy(c).add(dir.multiplyScalar(dist));
+    cam.near = Math.max(dist / 2000, 0.01); cam.far = dist * 2000;
+  }
+  cam.lookAt(c); cam.updateProjectionMatrix();
+  useCamera(cam);
+  controls.target.copy(c); controls.update();
+  updateSeedVisibility();
+  if (params.pathTrace) preparePT();
+}
+// Σ 观影位: 隐藏破坏沉浸的东西 —— 原始球体(你正站它那) + 所有文字标注(sprite, 永远画最上层会穿透墙); 其它视角恢复
+function updateSeedVisibility() {
+  if (!worldGroup) return;
+  const cinema = currentView === 'Σ眼';
+  worldGroup.traverse(o => { if (o.name === 'seedSphere' || o.isSprite) o.visible = !cinema; });
+}
+
+// ---- 三视口 (像三维软件: 左大透视 + 右上顶视 + 右下正视, 同屏并列) -----------
+function viewports() { // 各视口的像素矩形(WebGL 原点在左下) + 相机 + 控制器; 避开右侧 GUI 面板
+  const guiW = (document.querySelector('.lil-gui')?.offsetWidth || 0) + 8;
+  const W = Math.max(200, innerWidth - guiW), H = innerHeight;
+  const mainW = Math.round(W * viewState.splitX), topH = Math.round(H * viewState.splitY);
+  return [
+    { cam: persp, ctrl: controls, x: 0, y: 0, w: mainW, h: H, persp: true },
+    { cam: vpTop, ctrl: ctrlTop, x: mainW, y: H - topH, w: W - mainW, h: topH, dir: [0, 1, 0.001], up: [0, 0, -1] },   // 顶视(屏上)
+    { cam: vpFront, ctrl: ctrlFront, x: mainW, y: 0, w: W - mainW, h: H - topH, dir: [0, 0, 1], up: [0, 1, 0] },        // 正视(屏下)
+  ];
+}
+function frameViewports() { // 把两个正交视口取景到模型(透视口由其 OrbitControls 管)
+  if (!worldGroup) return;
+  const box = new THREE.Box3().setFromObject(worldGroup);
+  if (box.isEmpty()) return;
+  const sph = box.getBoundingSphere(new THREE.Sphere());
+  const c = sph.center, R = sph.radius || 1;
+  for (const vp of viewports()) {
+    if (vp.persp) continue;
+    const cam = vp.cam, a = vp.w / vp.h, m = R * 1.15;
+    cam.left = -m * a; cam.right = m * a; cam.top = m; cam.bottom = -m; cam.near = 0.01; cam.far = R * 40;
+    cam.up.set(...vp.up);
+    cam.position.copy(c).add(new THREE.Vector3(...vp.dir).normalize().multiplyScalar(R * 8));
+    cam.lookAt(c); cam.updateProjectionMatrix();
+    vp.ctrl.target.copy(c); vp.ctrl.update();
+  }
+}
+// 鼠标在哪个视口 / 是否压在分隔条上(屏幕坐标, 原点左上)
+function vpAtPointer(px, py) {
+  for (const vp of viewports()) {
+    const yTop = innerHeight - (vp.y + vp.h);
+    if (px >= vp.x && px <= vp.x + vp.w && py >= yTop && py <= innerHeight - vp.y) return vp;
+  }
+  return null;
+}
+function dividerAtPointer(px, py) {
+  const guiW = (document.querySelector('.lil-gui')?.offsetWidth || 0) + 8;
+  const W = Math.max(200, innerWidth - guiW), mainW = Math.round(W * viewState.splitX), topH = Math.round(innerHeight * viewState.splitY);
+  if (px < W && Math.abs(px - mainW) <= 5) return 'v';                    // 左右分隔条
+  if (px > mainW && px < W && Math.abs(py - topH) <= 5) return 'h';       // 上下分隔条(右栏内)
+  return null;
+}
+// 交互路由: 压在分隔条上→拖动改视口大小; 否则只让鼠标所在视口的控制器响应
+let dragDiv = null;
+// 挂在 window 捕获阶段: 抢在 OrbitControls(canvas 上、注册更早)之前路由/拦截
+window.addEventListener('pointerdown', (e) => {
+  if (!viewState.multi) return;
+  const d = dividerAtPointer(e.clientX, e.clientY);
+  if (d) { // 拖分隔条(抢在 OrbitControls 之前)
+    e.stopImmediatePropagation();
+    dragDiv = d;
+    const move = (ev) => {
+      const guiW = (document.querySelector('.lil-gui')?.offsetWidth || 0) + 8, W = Math.max(200, innerWidth - guiW);
+      if (dragDiv === 'v') viewState.splitX = Math.min(0.85, Math.max(0.2, ev.clientX / W));
+      else viewState.splitY = Math.min(0.85, Math.max(0.15, ev.clientY / innerHeight));
+      frameViewports();
+    };
+    const up = () => { dragDiv = null; removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+    return;
+  }
+  const vp = vpAtPointer(e.clientX, e.clientY); // 只启用鼠标所在视口的控制器
+  controls.enabled = !!(vp && vp.persp);
+  ctrlTop.enabled = !!(vp && vp.cam === vpTop);
+  ctrlFront.enabled = !!(vp && vp.cam === vpFront);
+}, true);
+renderer.domElement.addEventListener('pointermove', (e) => { // 分隔条上换光标
+  if (!viewState.multi || dragDiv) return;
+  const d = dividerAtPointer(e.clientX, e.clientY);
+  renderer.domElement.style.cursor = d === 'v' ? 'col-resize' : d === 'h' ? 'row-resize' : '';
+});
+window.addEventListener('wheel', (e) => { // 滚轮缩放路由到鼠标所在视口(同样抢在 OrbitControls 前)
+  if (!viewState.multi) return;
+  const vp = vpAtPointer(e.clientX, e.clientY);
+  controls.enabled = !!(vp && vp.persp);
+  ctrlTop.enabled = !!(vp && vp.cam === vpTop);
+  ctrlFront.enabled = !!(vp && vp.cam === vpFront);
+}, true);
+function renderMulti() { // 同场景渲染 3 次, 各塞进自己的矩形(scissor 裁剪) + 视口间隙边框
+  const g = 2; // 视口间隙(像素)
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+  renderer.setClearColor(0x1a2530, 1); renderer.clear(); // 整屏底色 = 视口边框色
+  renderer.setScissorTest(true);
+  for (const vp of viewports()) {
+    const w = vp.w - 2 * g, h = vp.h - 2 * g;
+    if (vp.persp) { persp.aspect = w / h; persp.updateProjectionMatrix(); }
+    renderer.setViewport(vp.x + g, vp.y + g, w, h);
+    renderer.setScissor(vp.x + g, vp.y + g, w, h);
+    renderer.render(scene, vp.cam);
+  }
+  renderer.setScissorTest(false);
+  renderer.setClearColor(0x000000, 1);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+}
+rebuild();
+
+// ---- GUI (从 src/app/params.js 的 schema 自动生成, 不再手写每个 gui.add) ----
+const { gui, ctrls } = buildGui(params, PARAM_SCHEMA, rebuild);
+const expandCtrl = ctrls.expand; // 动画循环里要 updateDisplay
+
+// 路径追踪精度: 改这几项不必整场重建(分辨率/反弹实时改, 采样上限主循环直接读), 只重置累积续渲染 → 拖动即时生效
+function applyPTOpts() {
+  if (!pathTracer) return;
+  pathTracer.renderScale = params.ptScale;
+  pathTracer.bounces = params.ptBounces;
+  pathTracer.reset(); // samples 归 0, 用新设置重新干净累积
+}
+for (const k of ['ptScale', 'ptBounces', 'ptSamples']) ctrls[k]?.onChange(applyPTOpts);
+
+// 进入"成像/观影"模式(反射 / 路径追踪 / Σ观影位) → 自动关黄(安全区)红(穿帮区)调试脚手架
+// 它们是布景调试用的, 看反射成像/影院画面时碍事; 关掉后用户仍可手动再勾选回来
+function suppressScaffold() {
+  let changed = false;
+  if (params.showUsable) { params.showUsable = false; ctrls.showUsable?.updateDisplay(); changed = true; }
+  if (params.showBug) { params.showBug = false; ctrls.showBug?.updateDisplay(); changed = true; }
+  return changed;
+}
+ctrls.realMirror?.onChange(v => { if (v) suppressScaffold(); rebuild(); }); // 开真实反射 → 关脚手架
+ctrls.pathTrace?.onChange(v => { if (v) suppressScaffold(); rebuild(); });   // 开路径追踪 → 关脚手架
+
+// ---- 视图栏 (相机预设可随时点击切换 + 模型升高) — 表现层, 不属模型参数 schema --
+const vf = gui.addFolder('视图');
+const viewBtns = { '透视图': () => setView('透视'), '轴测图': () => setView('轴测'), '正视图': () => setView('正视'), '顶视图': () => setView('顶视'), '侧视图': () => setView('侧视'), '↩ 回到 Σ·观影位': () => setView('Σ眼') };
+for (const k in viewBtns) vf.add(viewBtns, k);
+vf.add(viewState, 'lift', 0, 30, 0.5).name('模型升高').onChange(v => { if (worldGroup) worldGroup.position.y = v; });
+vf.add(viewState, 'multi').name('三视口 (透视+顶+正)').onChange(v => {
+  if (v) { useCamera(persp); controls.enabled = true; frameViewports(); }
+  else { controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false; renderer.domElement.style.cursor = ''; persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix(); renderer.setViewport(0, 0, innerWidth, innerHeight); }
+});
+
+// ---- 主循环 ------------------------------------------------------------------
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  if (params.autoPlay) {
+    params.expand = Math.sin(clock.getElapsedTime() * 0.6) * 0.5 + 0.5;
+    expandCtrl.updateDisplay(); rebuild();
+  }
+  controls.autoRotate = params.autoRotate;
+  controls.update();
+  if (params.pathTrace && ptReady) {           // 路径追踪: 渐进累积到上限后停(省 GPU); 相机变动由 'change' 重置续跑
+    if (pathTracer.samples < params.ptSamples) pathTracer.renderSample();
+  } else if (viewState.multi) { ctrlTop.update(); ctrlFront.update(); renderMulti(); }
+  else { renderer.setViewport(0, 0, innerWidth, innerHeight); renderer.render(scene, getCamera()); }
+}
+animate();
+</script>
+</body>
+</html>
