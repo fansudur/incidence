@@ -32,7 +32,7 @@ export const PARAM_SCHEMA = [
     { key: 'showActiveVol', label: '锥段脚手架', type: 'bool', def: false },
     { key: 'showLabels', label: '角点编号', type: 'bool', def: true },
     { key: 'showMirrorId', label: '镜面编号 M#', type: 'bool', def: true },
-    { key: 'showEndMirror', label: '收尾镜 M₄ (可隐藏)', type: 'bool', def: true },
+    { key: 'showEndMirror', label: '收尾镜 M₄ (可隐藏)', type: 'bool', def: false },
     { key: 'showGrid', label: '九宫格视线投影', type: 'bool', def: true },
     { key: 'showScenery', label: '测试布景 (红绿蓝/层)', type: 'bool', def: true },
     { key: 'showWall', label: '观影墙 (沉浸遮挡)', type: 'bool', def: true },
