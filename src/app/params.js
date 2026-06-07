@@ -43,6 +43,7 @@ export const PARAM_SCHEMA = [
     { key: 'showGrid', label: '九宫格视线投影', type: 'bool', def: true },
     { key: 'showScenery', label: '测试布景 (红绿蓝/层)', type: 'bool', def: true },
     { key: 'showFloor', label: '层地面 (倾斜)', type: 'bool', def: true },
+    { key: 'showFigures', label: '人物 (占位·站立)', type: 'bool', def: true },
     { key: 'showWall', label: '观影墙 (沉浸遮挡)', type: 'bool', def: true },
     { key: 'realMirror', label: '真实反射 (Reflector·实时)', type: 'bool', def: false, ref: 'realMirror' },
     { key: 'pathTrace', label: '路径追踪 (高保真·渐进)', type: 'bool', def: true, ref: 'pathTrace' },

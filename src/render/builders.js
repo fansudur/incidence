@@ -106,6 +106,24 @@ export function buildFloor(corners, colorHex) {
   return g;
 }
 
+// 占位人形 (低模: 胶囊身 + 球头): 脚立在 foot, 沿 up 朝向 (默认世界竖直=重力方向)。
+// height = 身高(场景单位)。先验证站位/受光/反射, 之后再换精模或加走动。
+export function buildFigure(foot, up, height, colorHex) {
+  const g = new THREE.Group();
+  const r = height * 0.12, bodyLen = height * 0.56; // 胶囊半径 / 直段长
+  const mat = new THREE.MeshStandardMaterial({ color: colorHex ?? 0xcfc7ba, roughness: 0.75, metalness: 0.0 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(r, bodyLen, 6, 14), mat);
+  body.position.y = r + bodyLen / 2;                 // 胶囊几何中心居中 → 底(脚)落在 y=0
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(height * 0.13, 18, 12), mat);
+  head.position.y = r + bodyLen + height * 0.07;
+  g.add(head);
+  g.position.copy(foot);
+  if (up && Math.abs(up.y - 1) > 1e-6)               // up≠世界Y 时才旋转(竖直站立默认不转)
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up.clone().normalize());
+  return g;
+}
+
 // 九宫格投影网格: sections = 各截面的 V3 网格点(行主序), N = 每边点数(=格数+1)。
 // 横竖网格线(每截面截出该层九宫格) + 纵向连线(截面间, =N² 条视线管, 看跨层遮挡)。
 export function buildProjGrid(sections, N, color) {

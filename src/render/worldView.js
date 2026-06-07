@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors } from '../core/activity.js';
-import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor } from './builders.js';
+import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
 // 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug }。
@@ -62,6 +62,15 @@ function buildSingleWorld(params, base = 0) {
 
   // 测试布景: 每层活动区中央放红/绿/蓝标记 (Σ 反射看到什么的地基; 真实反射接入后会被折叠合成)
   if (params.showScenery && !bug && mc.length >= 2) root.add(buildScenery(sceneryAnchors(mcPlain, data.seed), refSize));
+
+  // 占位人 (A 第一步): 第一层斜地面中央立一个人, 脚点贴面(底面四角双线性插值)、世界竖直 → 验证站位/受光/被折叠反射
+  if (params.showFigures && !bug && mc.length >= 2) {
+    const fc = [mc[0][2], mc[0][3], mc[1][3], mc[1][2]];   // 第一层地面四角 [近左, 近右, 远右, 远左]
+    const near = fc[0].clone().lerp(fc[1], 0.5);            // 近边中点 (左→右 s=0.5)
+    const far = fc[3].clone().lerp(fc[2], 0.5);             // 远边中点
+    const foot = near.lerp(far, 0.5);                       // 层中央 (近→远 t=0.5)
+    root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), refSize * 0.13));
+  }
 
   // 活动空间(布尔差集的输入): 各镜面间的截头锥段 + 4 个复用点(M_g 长边 / M_{g+1} 短边)
   if (params.showActiveVol && !bug) {
