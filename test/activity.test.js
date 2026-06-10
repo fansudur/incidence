@@ -1,7 +1,7 @@
 // 锁住活动区: 安全区(黄)与易穿帮区(红)都被算出来, 且穿帮区按"邻锥侧壁"切的水平判定有效。
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, polyArea } from '../src/core/activity.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, polyArea, groundSection } from '../src/core/activity.js';
 import { v, dist } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
@@ -53,6 +53,21 @@ test('层地面切分: 地面0 被下一段锥切出 安全碎片+穿帮块, 面
   const orig = polyArea(quad);
   assert(Math.abs(total - orig) < orig * 1e-6, `碎片面积和(${total.toFixed(6)})应=原四边形(${orig.toFixed(6)})`);
   assert(polyArea(s.bug) < orig, '穿帮块应是真子集(不该整块全是穿帮)');
+});
+
+test('水平地面: 每段锥在 y=-0.3 都有截面, 截面全在该高度, 安全区截面可站人', () => {
+  const r = traceFrustum(base);
+  const chain = [r.frame, ...r.mirrors, r.endMirror];
+  const h = -0.3; // 原始单位 -30 (取景框下边 -0.2 之下)
+  for (let i = 0; i < chain.length - 1; i++) {
+    const sec = groundSection([...chain[i], ...chain[i + 1]], h);
+    assert(sec && sec.length >= 3, `段${i} 应有地面截面`);
+    assert(sec.every((p) => Math.abs(p.y - h) < 1e-9), `段${i} 截面应全在 y=${h}`);
+    assert(polyArea(sec) > 0, `段${i} 截面应有面积`);
+  }
+  const sr = safeRegions(mcOf(), S);
+  const sec0 = groundSection(sr[0].points, h);
+  assert(sec0 && polyArea(sec0) > 0, '第一层安全区在该高度应有可站立截面');
 });
 
 test('布景锚点: 每层活动区一个, 数量 = 安全区段数, 质心有限', () => {

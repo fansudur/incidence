@@ -125,6 +125,31 @@ export function splitFloorByNextCone(poly, near, far) {
   return { safe, bug: rest };
 }
 
+// ── 水平地面 ────────────────────────────────────────────────────────────────
+// 水平面是 45°镜系统的不变量(镜法线水平, 反射不改高度): 高度 h 的水平面折叠后仍是高度 h 的水平面
+// → Σ 看到连续平地; 错链所见与正链重合(自遮盖), 地面无需邻锥裁剪; 各段在镜面处无缝拼接。
+// groundSection(points, h): 凸点云(锥段 8 角 / 安全区点集) ∩ 平面 y=h → 水平凸多边形 (不足则 null)。
+// 取所有点对连线与平面的交点(含内部对角线交点, 都在截面内), 再做 (x,z) 2D 凸包 = 精确截面。
+export function groundSection(points, h) {
+  const pts = [];
+  for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+    const a = points[i], b = points[j], da = a.y - h, db = b.y - h;
+    if ((da <= 0 && db > 0) || (da > 0 && db <= 0)) {
+      const t = da / (da - db);
+      pts.push(v(a.x + (b.x - a.x) * t, h, a.z + (b.z - a.z) * t));
+    }
+  }
+  if (pts.length < 3) return null;
+  // Andrew 单调链 2D 凸包 (x,z 平面)
+  const s = [...pts].sort((p, q) => p.x - q.x || p.z - q.z);
+  const cr = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  const lo = [], up = [];
+  for (const p of s) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of [...s].reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  const hull = [...lo.slice(0, -1), ...up.slice(0, -1)];
+  return hull.length >= 3 && polyArea(hull) > 1e-9 ? hull : null;
+}
+
 // 布景锚点: 每层安全区里放一个布景的位置 + 尺寸。复用 safeRegions, 纯数据零 three。
 // 竖向按九宫格错开: 层1=最下 / 层2=中 / 层3=最上 (防近大远小时近层挡住远层); 尺寸≈该层格子大小。
 export function sceneryAnchors(mc, seed) {

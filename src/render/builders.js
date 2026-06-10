@@ -107,6 +107,22 @@ export function buildFloor(poly, colorHex) {
   return g;
 }
 
+// 水平地面 (真实世界地, 不透明): poly = 水平凸多边形 (CORE groundSection 产物)。
+// 水平面是 45°镜系统的不变量 → 各段无缝拼接、错链自遮盖, 不需邻锥裁剪。
+export function buildGround(poly, colorHex) {
+  const P = poly.map(p => new THREE.Vector3(p.x, p.y, p.z));
+  const tris = [];
+  for (let i = 1; i < P.length - 1; i++) tris.push(P[0], P[i], P[i + 1]);
+  const verts = new Float32Array(tris.length * 3);
+  tris.forEach((p, i) => { verts[i * 3] = p.x; verts[i * 3 + 1] = p.y; verts[i * 3 + 2] = p.z; });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    color: colorHex, metalness: 0.0, roughness: 0.92, side: THREE.DoubleSide,
+  }));
+}
+
 // 占位人形 (低模: 胶囊身 + 球头): 脚立在 foot, 沿 up 朝向 (默认世界竖直=重力方向)。
 // height = 身高(场景单位)。先验证站位/受光/反射, 之后再换精模或加走动。
 export function buildFigure(foot, up, height, colorHex) {

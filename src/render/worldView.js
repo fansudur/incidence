@@ -3,8 +3,8 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone } from '../core/activity.js';
-import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildFigure } from './builders.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection } from '../core/activity.js';
+import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
 // 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug }。
@@ -71,13 +71,25 @@ function buildSingleWorld(params, base = 0) {
   // 测试布景: 每层活动区中央放红/绿/蓝标记 (Σ 反射看到什么的地基; 真实反射接入后会被折叠合成)
   if (params.showScenery && !bug && mc.length >= 2) root.add(buildScenery(sceneryAnchors(mcPlain, data.seed), refSize));
 
-  // 占位人 (A 第一步): 第一层斜地面中央立一个人, 脚点贴面(底面四角双线性插值)、世界竖直 → 验证站位/受光/被折叠反射
-  if (params.showFigures && !bug && mc.length >= 2) {
-    const fc = [mc[0][2], mc[0][3], mc[1][3], mc[1][2]];   // 第一层地面四角 [近左, 近右, 远右, 远左]
-    const near = fc[0].clone().lerp(fc[1], 0.5);            // 近边中点 (左→右 s=0.5)
-    const far = fc[3].clone().lerp(fc[2], 0.5);             // 远边中点
-    const foot = near.lerp(far, 0.5);                       // 层中央 (近→远 t=0.5)
-    root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), refSize * 0.13));
+  // 水平地面 (真实世界地): 每段光锥 ∩ 平面 y=groundY → 水平多边形, 镜面处无缝拼接 (水平面=镜系统不变量)
+  const gY = (params.groundY ?? -30) / U;
+  if (params.showGround && !bug && mcPlain.length >= 1) {
+    const chain = [data.frame, ...mcPlain];                       // F → M1 → … → 末镜, 逐段
+    for (let i = 0; i < chain.length - 1; i++) {
+      const sec = groundSection([...chain[i], ...chain[i + 1]], gY);
+      if (sec) root.add(buildGround(sec, 0x8a8378));
+    }
+  }
+
+  // 占位人: 站在水平地面上(重力竖直), 位置 = 第一层安全区在地面高度的截面质心 (安全区约束防穿帮)
+  if (params.showFigures && !bug && mcPlain.length >= 2) {
+    const sr = safeRegions(mcPlain, data.seed);
+    const sec = sr.length ? groundSection(sr[0].points, gY) : null;
+    if (sec) {
+      const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
+      const foot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length);
+      root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
+    } // 地面高度不穿过第一层安全区时无处可站 → 不放人
   }
 
   // 活动空间(布尔差集的输入): 各镜面间的截头锥段 + 4 个复用点(M_g 长边 / M_{g+1} 短边)
