@@ -22,7 +22,7 @@ export const PARAM_SCHEMA = [
     { key: 'skyHorizon', label: '地平线色', type: 'color', def: '#d8c4a8', ref: 'skyHorizon' },
   ] },
   { folder: '地面与人物', items: [
-    { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: true, note: '真实地面=水平(重力); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
+    { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: false, note: '默认隐藏(作者: 平坦灰地反而压缩空间感, 待地形起伏拉开深浅); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
     { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 取景框下边=-frameH/2; 越低地面越晚进入画面' },
     { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照)' },
   ] },

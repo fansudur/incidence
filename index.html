@@ -19,6 +19,10 @@
     font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     color: #ff5ad0; text-shadow: 0 1px 2px #000; pointer-events: none; display: none; max-width: 60%;
   }
+  /* 移动端: 左上角说明文字暂时隐藏(技术细节待换成装置理念文案), 侧边栏由 JS 默认收起 */
+  @media (max-width: 768px) {
+    #info { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -261,6 +265,7 @@ rebuild();
 // ---- GUI (从 src/app/params.js 的 schema 自动生成, 不再手写每个 gui.add) ----
 const { gui, ctrls } = buildGui(params, PARAM_SCHEMA, rebuild);
 const expandCtrl = ctrls.expand; // 动画循环里要 updateDisplay
+if (matchMedia('(max-width: 768px)').matches) gui.close(); // 移动端: 侧边栏默认收起(点标题可展开)
 
 // 路径追踪精度: 改这几项不必整场重建(分辨率/反弹实时改, 采样上限主循环直接读), 只重置累积续渲染 → 拖动即时生效
 function applyPTOpts() {
