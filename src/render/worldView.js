@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors } from '../core/activity.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone } from '../core/activity.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
@@ -53,11 +53,19 @@ function buildSingleWorld(params, base = 0) {
     root.add(buildProjGrid(secs, 4, 0x4a90d0));
   }
 
-  // 层地面(倾斜): 每段锥的底面四边形 = 该层活动区的地面 (视锥底边发散 → 朝远处向下倾斜); 按层色着色, 人/物将站这上面
-  if (params.showFloor && !bug && mc.length >= 2) {
+  // 层地面(视锥下边界, 倾斜): 每段锥的底面四边形。沿本层镜链看恰好侧对成线;
+  // 但其"高于下一段地面平面"的部分物理上伸进下一段光锥 → 被错误镜链斜看成面(=红区理论的穿帮)。
+  // 故切成两份: 安全段(showFloor) + 穿帮段(showFloorBug, 红色, 默认隐藏备用)。末段无下一平面, 不切。
+  if ((params.showFloor || params.showFloorBug) && !bug && mc.length >= 2) {
     const floorCol = [0xff6a6a, 0x6aff8a, 0x6ab4ff];
-    for (let gp = 0; gp < mc.length - 1; gp++)
-      root.add(buildFloor([mc[gp][2], mc[gp][3], mc[gp + 1][3], mc[gp + 1][2]], floorCol[gp % 3]));
+    for (let gp = 0; gp < mc.length - 1; gp++) {
+      const quad = [mc[gp][2], mc[gp][3], mc[gp + 1][3], mc[gp + 1][2]];
+      if (gp + 2 < mc.length) {
+        const s = splitFloorByNextCone(quad, mc[gp + 1], mc[gp + 2]);
+        if (params.showFloor) for (const frag of s.safe) root.add(buildFloor(frag, floorCol[gp % 3]));
+        if (params.showFloorBug && s.bug) root.add(buildFloor(s.bug, 0xff3344));
+      } else if (params.showFloor) root.add(buildFloor(quad, floorCol[gp % 3]));
+    }
   }
 
   // 测试布景: 每层活动区中央放红/绿/蓝标记 (Σ 反射看到什么的地基; 真实反射接入后会被折叠合成)

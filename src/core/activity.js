@@ -78,6 +78,53 @@ export function bugRegions(mc, seed) {
   return out;
 }
 
+// ── 层地面切分 ──────────────────────────────────────────────────────────────
+// 地面g 中物理上伸进【下一段光锥】的部分, 会被下一段镜链(错误的链)斜看成一张面(穿帮, 实测逐像素追迹确认);
+// 其余部分沿自己的镜链看恰好侧对成线(正确)。锥体 = 6 半空间(上下左右壁+前后截面), 逐面切:
+// 每切一刀, 外侧碎片 = 安全(凸, 互不相交), 剩余继续切; 全切完的残余 = 穿帮块。
+export const polyArea = (P) => { // 平面多边形面积
+  let s = v(0, 0, 0);
+  for (let i = 1; i < P.length - 1; i++) s = add(s, cross(sub(P[i], P[0]), sub(P[i + 1], P[0])));
+  return Math.sqrt(dot(s, s)) / 2;
+};
+function splitPolyByPlane(poly, pl) { // 凸多边形 ÷ 平面 → { inside(sd≥0), outside(sd≤0) }
+  const EPS = 1e-9, inside = [], outside = [];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const dp = sd(p, pl), dq = sd(q, pl);
+    if (dp >= -EPS) inside.push(p);
+    if (dp <= EPS) outside.push(p);
+    if ((dp < -EPS && dq > EPS) || (dp > EPS && dq < -EPS)) {
+      const x = lerp(p, q, dp / (dp - dq));
+      inside.push(x); outside.push(x);
+    }
+  }
+  const ok = (P) => P.length >= 3 && polyArea(P) > 1e-8;
+  return { inside: ok(inside) ? inside : null, outside: ok(outside) ? outside : null };
+}
+// poly = 地面多边形; near/far = 下一段锥的两端截面四边形 (mc[g+1], mc[g+2])。
+// 返回 { safe: [凸碎片...], bug: 凸多边形|null }
+export function splitFloorByNextCone(poly, near, far) {
+  const it = centroid([...near, ...far]);
+  const planes = [
+    inFace(near[0], near[1], far[1], it), // 上壁
+    inFace(near[2], near[3], far[3], it), // 下壁
+    inFace(near[1], near[2], far[2], it), // 左壁
+    inFace(near[0], near[3], far[3], it), // 右壁
+    inFace(near[0], near[1], near[2], it), // 近截面(镜 g+1 所在平面)
+    inFace(far[0], far[1], far[2], it),    // 远截面(镜 g+2 所在平面)
+  ];
+  const safe = [];
+  let rest = poly;
+  for (const pl of planes) {
+    if (!rest) break;
+    const r = splitPolyByPlane(rest, pl);
+    if (r.outside) safe.push(r.outside);
+    rest = r.inside;
+  }
+  return { safe, bug: rest };
+}
+
 // 布景锚点: 每层安全区里放一个布景的位置 + 尺寸。复用 safeRegions, 纯数据零 three。
 // 竖向按九宫格错开: 层1=最下 / 层2=中 / 层3=最上 (防近大远小时近层挡住远层); 尺寸≈该层格子大小。
 export function sceneryAnchors(mc, seed) {

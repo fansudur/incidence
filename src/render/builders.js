@@ -85,15 +85,16 @@ export function buildMirror(c, opacity) {
   return g;
 }
 
-// 层地面 = 锥段"底面"四边形 (两镜下边角点 2/3 围成): 视锥底边光线发散→这面朝远处向下倾斜, 是该层活动区的地面。
-// corners 顺序 = [g下左(2), g下右(3), g+1下右(3), g+1下左(2)]; 半透明着色 + 亮描边, 看清平面朝向。
-export function buildFloor(corners, colorHex) {
+// 层地面 = 锥段"底面"(视锥下边界): 底边光线发散→朝远处向下倾斜。沿本层镜链看恰好侧对成线;
+// 伸进邻段光锥的部分(穿帮段)由 CORE splitFloorByNextPlane 切出后分开传入。
+// poly = 平面凸多边形顶点(N≥3, CORE 纯点或 Vector3 均可); 半透明着色 + 描边。
+export function buildFloor(poly, colorHex) {
   const g = new THREE.Group();
-  const p = corners;
-  const verts = new Float32Array([
-    p[0].x, p[0].y, p[0].z, p[1].x, p[1].y, p[1].z, p[2].x, p[2].y, p[2].z,
-    p[0].x, p[0].y, p[0].z, p[2].x, p[2].y, p[2].z, p[3].x, p[3].y, p[3].z,
-  ]);
+  const P = poly.map(p => new THREE.Vector3(p.x, p.y, p.z));
+  const tris = [];
+  for (let i = 1; i < P.length - 1; i++) tris.push(P[0], P[i], P[i + 1]); // 凸多边形扇形剖分
+  const verts = new Float32Array(tris.length * 3);
+  tris.forEach((p, i) => { verts[i * 3] = p.x; verts[i * 3 + 1] = p.y; verts[i * 3 + 2] = p.z; });
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
   geo.computeVertexNormals();
@@ -101,7 +102,7 @@ export function buildFloor(corners, colorHex) {
     color: colorHex, transparent: true, opacity: 0.32, side: THREE.DoubleSide,
     metalness: 0.0, roughness: 0.95, depthWrite: false,
   })));
-  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p[0], p[1], p[2], p[3], p[0]]),
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([...P, P[0]]),
     new THREE.LineBasicMaterial({ color: colorHex })));
   return g;
 }
