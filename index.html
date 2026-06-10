@@ -64,7 +64,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // 三�
 const params = defaultParams(); // 初始参数(默认值)由 src/app/params.js 的 schema 生成
 
 let currentView = '透视';                                        // 单视口的当前视图预设
-const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5 }; // 模型升高 / 三视口开关 / 左右·上下分隔比例
+const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5, eyeFovScale: 1.0 }; // 模型升高 / 三视口 / 分隔比例 / Σ眼视野放宽(1=竖直正好等于F, >1=看到框外观影墙)
 
 const { renderer, scene, controls, persp, ortho, eyeCam, getCamera, useCamera, updateEnv } = createScene(params); // 透视+正交+Σ眼 三相机 + 天空/太阳 → src/render/scene.js
 const vpTop = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 5000);   // 三视口·顶视
@@ -115,7 +115,7 @@ function setView(name) {
     currentView = name;
     if (suppressScaffold()) rebuild(); // 观影位也关黄红脚手架(rebuild 移除其 mesh; framed 已 true 不会再切视图)
     const lift = viewState.lift, fd = params.fDist / 100;
-    eyeCam.fov = THREE.MathUtils.radToDeg(2 * Math.atan((params.frameH / 2) / params.fDist)) * 1.25; // 略宽于 F → 看到一圈暗墙(影院感)
+    eyeCam.fov = THREE.MathUtils.radToDeg(2 * Math.atan((params.frameH / 2) / params.fDist)) * viewState.eyeFovScale; // 1=竖直正好等于F(视锥边界塌成画面边); >1=放宽看到框外暗墙(影院感); 水平方向跟窗口宽高比(overscan, 各三维软件同此)
     eyeCam.position.set(0, lift, 0); eyeCam.up.set(0, 1, 0); eyeCam.lookAt(fd, lift, 0);
     eyeCam.updateProjectionMatrix();
     useCamera(eyeCam); controls.target.set(fd, lift, 0); controls.update();
@@ -294,6 +294,12 @@ const vf = gui.addFolder('视图');
 const viewBtns = { '透视图': () => setView('透视'), '轴测图': () => setView('轴测'), '正视图': () => setView('正视'), '顶视图': () => setView('顶视'), '侧视图': () => setView('侧视'), '↩ 回到 Σ·观影位': () => setView('Σ眼') };
 for (const k in viewBtns) vf.add(viewBtns, k);
 vf.add(viewState, 'lift', 0, 30, 0.5).name('模型升高').onChange(v => { if (worldGroup) worldGroup.position.y = v; });
+vf.add(viewState, 'eyeFovScale', 1, 1.8, 0.05).name('Σ眼视野放宽 ×').onChange(() => { // 1=正好等于F; 轻量: 只改 fov 不重建
+  if (currentView !== 'Σ眼') return;
+  eyeCam.fov = THREE.MathUtils.radToDeg(2 * Math.atan((params.frameH / 2) / params.fDist)) * viewState.eyeFovScale;
+  eyeCam.updateProjectionMatrix();
+  if (params.pathTrace && pathTracer) pathTracer.updateCamera();
+});
 vf.add(viewState, 'multi').name('三视口 (透视+顶+正)').onChange(v => {
   if (v) { useCamera(persp); controls.enabled = true; frameViewports(); }
   else { controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false; renderer.domElement.style.cursor = ''; persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix(); renderer.setViewport(0, 0, innerWidth, innerHeight); }
