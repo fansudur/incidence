@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection } from '../core/activity.js';
-import { terrainOnPlane, liftAt } from '../core/terrain.js';
+import { terrainOnPlane, liftAt, regionDepthInfo, warpS } from '../core/terrain.js';
 import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
@@ -91,24 +91,30 @@ function buildSingleWorld(params, base = 0) {
     const bm = data.beam;                                       // [Σ, M₁心, M₂心, ...] 中心光路(水平)
     const S = [0];                                               // 展开累计深度
     for (let i = 1; i < bm.length; i++) S.push(S[i - 1] + vdist(bm[i - 1], bm[i]));
+    const frameOf = (g) => {                                     // 段坐标系: P0/dir/side(含手性翻转)/S0
+      const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));
+      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递, 否则跨缝地貌左右颠倒
+      return { P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
+    };
+    const regs = safeRegions(mcPlain, data.seed).filter((r) => r.gap + 2 < bm.length && r.gap + 1 < mcPlain.length);
+    const basePtsOf = (g) => [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
+    // 第一遍: 各层深度信息 → 接缝冻结带 [g 层尾边最浅, g+1 层头边最深] (R1 对齐衔接, 所有缝默认)
+    const infos = regs.map((r) => regionDepthInfo(r.points, basePtsOf(r.gap), frameOf(r.gap)));
+    const bands = [];
+    for (let i = 0; i < regs.length - 1; i++)
+      if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
+        bands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
     const fpBase = {
       hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist, // 锥高·半宽 随深度的斜率
-      rampA: S[1], rampB: S[2],                                  // 包络: M₁ 处 0 → M₂ 处满
+      rampA: warpS(S[1], bands), rampB: warpS(S[2], bands),      // 包络锚点换到 σ 域
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
-      headFrac: params.terrainHead ?? 0.25,                      // 前缘贴地深度(×层深): 前脸不许有剖切墙(作者规则)
+      headFrac: params.terrainHead ?? 0.25, bands,
     };
-    // 范围 = 黄色安全区(作者选定): 红区腾空 → 重影/跨层遮挡/跨链阴影三个隐患清零;
-    // 代价(作者知情接受): 每道镜缝处可见切割边缘+空带, 作为剖切模型语言的一部分。
-    // 接缝两侧的高度轮廓仍出自同一个全局连续场("整体大地形") → 跨缝地貌天然对位。
-    for (const r of safeRegions(mcPlain, data.seed)) {
-      const g = r.gap;
-      if (g + 2 >= bm.length || g + 1 >= mcPlain.length) continue;
-      const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));             // 该段光路方向(水平)
-      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递 = rot90(dir)×(-1)^g, 否则跨缝地貌左右颠倒
-      const fp = { ...fpBase, P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
-      const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
-      const grid = terrainOnPlane(r.points, basePts, fp);
-      if (grid) { terrains.push({ gap: g, grid }); root.add(buildTerrain(grid)); }
+    // 第二遍: 建各层地形。范围=黄色安全区(红区腾空); R2 贴地仅第一层(gap 0)面对 M₁ 的前边
+    for (const r of regs) {
+      const fp = { ...fpBase, ...frameOf(r.gap), flushFront: r.gap === 0 };
+      const grid = terrainOnPlane(r.points, basePtsOf(r.gap), fp);
+      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid)); }
     }
   }
 

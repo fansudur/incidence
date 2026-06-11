@@ -1,14 +1,14 @@
-// 地形 (零 three 依赖): 以【层底斜面】为基面、定义在【展开连续坐标】上的全局噪声场。
-// 设计要点(作者逐步确认):
-//  - 基面 = 层锥底斜面 → Σ 视角塌到画面下边缘, 地形从画面底边长起、无悬空。
-//  - 噪声场画在展开坐标 (s=沿光路累计深度, w=横向/半宽) 上, 三层共用同一个场:
-//    45° 反射对镜面平面内的点保持 s/w 分量不变 → 相邻层在镜面接缝处采样同一噪声值,
-//    高度【严格相等】→ 三块地形透过折叠读成一片连续大地 (作者的"视觉连接成整体")。
-//  - 深度包络 ramp(s): M₁ 处为 0(最前景趋平, 不挡后层), 到 M₂ 平滑升满 (作者的"面对镜1最低")。
-//  - 自相似尺度: 噪声沿 log₂(s) 采样 → 山的尺寸随深度等比放大 (正典 W₁<W₂<W₃);
-//    幅度 = 系数 × 局部锥高(∝s) × ramp → 深层自适应更大。
-//  - 边缘不衰减: 全幅度到安全区边界直接切断 + 垂直裙边(剖切模型感); 只发射全内三角 → 不越界
-//    (侧壁均为竖直平面, 竖直抬升不可能横向出界)。
+// 地形 (零 three 依赖): 以层底斜面为基面、定义在展开连续坐标上的全局噪声场。
+// 规则(作者逐条确认):
+//  R1【对齐衔接·所有接缝默认】: 第 g 层尾边的高度轮廓 = 第 g+1 层头边的起始轮廓(逐点严格相等)。
+//     实现 = 接缝冻结带: 深度坐标 σ 在 [g 层尾边最浅处, g+1 层头边最深处] 区间内冻结,
+//     两侧按同一 (σ, 角向w) 采样 → 轮廓相等 → 从 Σ 看, 近脊正好把远切口挡在身后, 缝自动隐形。
+//     对任意层数(2/3/...N 层)的每道缝自动成立。
+//  R2【首层贴地·仅此一处】: 只有第一层面对 M₁ 的那条边贴地收平(它前面没有可衔接的东西);
+//     按【到前边界的平面距离】渐入(前边界是斜切线, 按深度渐入会在边界深端漏一堵墙——已踩过的坑)。
+//     其余所有边正常起伏, 切割边缘+裙边保留。
+//  其它沿用: 基面=层底斜面; 角向 w=横向/半宽(透视不变, 视线匹配的两点同 w); 手性逐折翻转;
+//  σ 自相似 log₂ 采样(层间放大, 正典 W₁<W₂<W₃; "场地拉伸"是装置固有属性, Σ 视角被透视抵消)。
 import { planeSection } from './activity.js';
 import { v, sub, dot, cross, normalize } from './vec.js';
 
@@ -35,41 +35,34 @@ export function fbm(u, w, seed, oct = 4) {
   return acc;
 }
 
-// ── 全局噪声场: 3D 点 → 竖直抬升 ───────────────────────────────────────────
-// fp(每层一份, 场参数全局一致): P0=该段光路起点(镜心), dir=该段光路方向(水平单位), side=水平横向单位,
-//   S0=展开累计深度(到 P0), hSlope=锥高/深度(frameH/fDist), wSlope=半宽/深度(frameW/2/fDist),
-//   rampA/rampB=包络起止深度(M₁/M₂ 处), seed/waves/ampRatio。
-// 反射不变性: 镜面平面内的点对相邻两段 fp 算出同一 (s,lat) → 接缝高度严格相等。
+// ── 接缝冻结带: σ(s) — 带内冻结, 带外平移, 连续单调 ─────────────────────────
+export function warpS(s, bands) {
+  if (!bands || !bands.length) return s;
+  let sig = s;
+  for (const [a, b] of bands) {
+    if (s >= b) sig -= (b - a);
+    else if (s > a) sig -= (s - a);
+  }
+  return sig;
+}
+
+// ── 全局噪声场: 3D 点 → 竖直抬升 (R1 在此实现) ─────────────────────────────
+// fp: P0/dir/side/S0(段坐标系, side 含手性翻转) + hSlope/wSlope + rampA/rampB(σ域)
+//     + seed/waves/ampRatio + bands(冻结带列表)
 export function liftField(fp, p) {
   const r = sub(p, fp.P0);
-  const s = fp.S0 + dot(r, fp.dir);                    // 展开累计深度 (跨镜连续)
+  const s = fp.S0 + dot(r, fp.dir);                    // 展开深度(跨镜连续)
   if (s <= 1e-6) return { lift: 0, t: 0 };
-  const w = (fp.wSlope * s > 1e-9) ? dot(r, fp.side) / (fp.wSlope * s) : 0; // 横向/半宽 ∈ ~[-1,1]
-  const u = fp.waves * Math.log2(s);                   // 自相似: 山随深度等比放大
+  const w = (fp.wSlope * s > 1e-9) ? dot(r, fp.side) / (fp.wSlope * s) : 0; // 角向(透视不变, 用原始 s)
+  const sig = warpS(s, fp.bands);                      // 冻结带坐标: 缝两侧同 σ → 轮廓相等
+  const u = fp.waves * Math.log2(Math.max(sig, 1e-6)); // 自相似: 山随深度等比放大
   const t = fbm(u, fp.waves * w, fp.seed);
-  const ramp = smooth(clamp01((s - fp.rampA) / Math.max(1e-9, fp.rampB - fp.rampA))); // M₁→M₂ 渐起
-  return { lift: fp.ampRatio * fp.hSlope * s * ramp * t, t };
+  const ramp = smooth(clamp01((sig - fp.rampA) / Math.max(1e-9, fp.rampB - fp.rampA))); // M₁→M₂ 渐起
+  return { lift: fp.ampRatio * fp.hSlope * sig * ramp * t, t };
 }
 
-// 前缘贴地: 每块地形在自己范围内, 从最近端(s 最小)起一段深度内抬升渐入(0→全幅)。
-// 作者规则: 朝向观者的"前脸"必须贴地, 不许有正对画面的剖切墙(侧/背剖切保留)。
-// headFrac = 贴地段占该块深度的比例 (0=关闭); 存于 meta, 采样与生成同函数。
-function headFade(meta, s) {
-  if (!meta.headLen) return 1;
-  const t = (s - meta.sMin) / meta.headLen;
-  const c = Math.max(0, Math.min(1, t));
-  return c * c * (3 - 2 * c);
-}
-// 表面抬升采样 (生成/人物落点共用): 基面点 → 全局场 × 前缘贴地
-export function liftAt(meta, basePoint) {
-  const L = liftField(meta.fp, basePoint);
-  const s = meta.fp.S0 + dot(sub(basePoint, meta.fp.P0), meta.fp.dir);
-  return { lift: L.lift * headFade(meta, s), t: L.t };
-}
-
-// ── 主函数: 安全区点集 + 基面三点 + 场参数 → 地形网格(纯数据) ────────────────
-// 返回 { positions, indices, rel, meta } | null。rel: 表面顶点=噪声相对值0..1, 裙边底=-1 (着色用)。
-export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
+// ── 基面公共构造 (hull/标架/2D凸包) ────────────────────────────────────────
+function basis(regionPoints, basePts) {
   const [pa, pb, pc] = basePts;
   let n = normalize(cross(sub(pb, pa), sub(pc, pa)));
   if (n.y < 0) n = v(-n.x, -n.y, -n.z);
@@ -77,16 +70,84 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   if (!hull) return null;
   const ref = Math.abs(n.y) < 0.9 ? v(0, 1, 0) : v(1, 0, 0);
   const e1 = normalize(cross(n, ref)), e2 = cross(n, e1);
-  const A = (p) => dot(sub(p, pa), e1), B = (p) => dot(sub(p, pa), e2);
-  const hull2 = hull.map((p) => ({ a: A(p), b: B(p) }));
+  const to2 = (p) => ({ a: dot(sub(p, pa), e1), b: dot(sub(p, pa), e2) });
+  return { pa, n, e1, e2, hull, hull2: hull.map(to2) };
+}
+
+// 2D 凸包边按朝向分类: 外法线的深度分量 → head(朝浅/朝观者) / tail(朝深) / side
+function classifyEdges(hull2, d2) {
+  let area = 0;
+  for (let i = 0; i < hull2.length; i++) { const p = hull2[i], q = hull2[(i + 1) % hull2.length]; area += p.a * q.b - q.a * p.b; }
+  const ccw = area > 0;
+  const edges = [];
+  for (let i = 0; i < hull2.length; i++) {
+    const p = hull2[i], q = hull2[(i + 1) % hull2.length];
+    let na = q.b - p.b, nb = -(q.a - p.a);             // 边方向转 -90°
+    if (!ccw) { na = -na; nb = -nb; }                  // 统一为外法线
+    const len = Math.hypot(na, nb) || 1;
+    const dd = (na * d2.a + nb * d2.b) / len;
+    edges.push({ p, q, type: dd < -0.3 ? 'head' : dd > 0.3 ? 'tail' : 'side' });
+  }
+  return edges;
+}
+const distToSeg = (a, b, s0, s1) => { // 2D 点到线段距离
+  const dx = s1.a - s0.a, db = s1.b - s0.b, L2 = dx * dx + db * db || 1e-12;
+  const t = clamp01(((a - s0.a) * dx + (b - s0.b) * db) / L2);
+  return Math.hypot(s0.a + t * dx - a, s0.b + t * db - b);
+};
+
+// ── 层深度信息 (worldView 第一遍: 算冻结带用) ───────────────────────────────
+// 返回 { sMin, sMax, tailMinS(尾边最浅), headMaxS(头边最深) } | null
+export function regionDepthInfo(regionPoints, basePts, fp) {
+  const B = basis(regionPoints, basePts);
+  if (!B) return null;
+  const sOf = (p) => fp.S0 + dot(sub(p, fp.P0), fp.dir);
+  const ss = B.hull.map(sOf);
+  const sMin = Math.min(...ss), sMax = Math.max(...ss);
+  const dproj = { a: dot(fp.dir, B.e1), b: dot(fp.dir, B.e2) };
+  const dl = Math.hypot(dproj.a, dproj.b) || 1;
+  const d2 = { a: dproj.a / dl, b: dproj.b / dl };
+  const edges = classifyEdges(B.hull2, d2);
+  let tailMinS = sMax, headMaxS = sMin;                // 兜底: 无对应类时退化为端值
+  edges.forEach((e, i) => {
+    const s1 = ss[B.hull2.indexOf(e.p)], s2 = ss[B.hull2.indexOf(e.q)];
+    if (e.type === 'tail') tailMinS = Math.min(tailMinS, s1, s2);
+    if (e.type === 'head') headMaxS = Math.max(headMaxS, s1, s2);
+  });
+  return { sMin, sMax, tailMinS, headMaxS };
+}
+
+// ── 表面抬升采样 (生成/落点共用): 全局场 × 首层前缘贴地(R2, 仅 flushFront) ──
+export function liftAt(meta, basePoint) {
+  const L = liftField(meta.fp, basePoint);
+  if (!meta.frontSegs || !meta.frontSegs.length) return L;
+  const a = dot(sub(basePoint, meta.pa), meta.e1), b = dot(sub(basePoint, meta.pa), meta.e2);
+  let d = Infinity;
+  for (const sg of meta.frontSegs) d = Math.min(d, distToSeg(a, b, sg.p, sg.q));
+  const f = smooth(clamp01(d / meta.flushDist));       // 到前边界的平面距离 → 贴地渐入
+  return { lift: L.lift * f, t: L.t };
+}
+
+// ── 主函数: 安全区点集 + 基面三点 + 场参数 → 地形网格(纯数据) ────────────────
+// 返回 { positions, indices, rel, meta } | null。rel: 表面=噪声相对值0..1, 裙边底=-1。
+export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
+  const B = basis(regionPoints, basePts);
+  if (!B) return null;
+  const { pa, n, e1, e2, hull2 } = B;
   let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
   for (const q of hull2) { minA = Math.min(minA, q.a); maxA = Math.max(maxA, q.a); minB = Math.min(minB, q.b); maxB = Math.max(maxB, q.b); }
   const sa = maxA - minA || 1e-9, sb = maxB - minB || 1e-9;
-  const sOf = (p) => fp.S0 + dot(sub(p, fp.P0), fp.dir);        // 展开深度
-  let sMin = Infinity, sMax = -Infinity;
-  for (const p of hull) { const s = sOf(p); sMin = Math.min(sMin, s); sMax = Math.max(sMax, s); }
-  const headLen = (fp.headFrac ?? 0) * Math.max(1e-9, sMax - sMin); // 前缘贴地段深度
-  const meta = { pa, n, e1, e2, minA, minB, sa, sb, hull2, fp, sMin, headLen };
+  const meta = { pa, n, e1, e2, minA, minB, sa, sb, hull2, fp, frontSegs: null, flushDist: 0 };
+
+  if (fp.flushFront) {                                  // R2: 仅首层 — 前(head)边贴地, 按边界距离
+    const dproj = { a: dot(fp.dir, e1), b: dot(fp.dir, e2) };
+    const dl = Math.hypot(dproj.a, dproj.b) || 1;
+    const d2 = { a: dproj.a / dl, b: dproj.b / dl };
+    meta.frontSegs = classifyEdges(hull2, d2).filter((e) => e.type === 'head');
+    const depths = hull2.map((q) => q.a * d2.a + q.b * d2.b);
+    const ext = Math.max(...depths) - Math.min(...depths) || 1e-9; // 层深(基面内)
+    meta.flushDist = Math.max(1e-9, (fp.headFrac ?? 0.25) * ext);
+  }
 
   const inside2 = (a, b) => {
     let sign = 0;
@@ -142,7 +203,7 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   return { positions: new Float32Array(positions), indices: new Uint32Array(tris), rel: new Float32Array(rel), meta };
 }
 
-// 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 全局场抬升×前缘贴地 (人物落点/行走路径用, 与生成同一函数)
+// 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 抬升 (人物落点/行走路径用, 与生成同一函数)
 export function pointAt(meta, u, w) {
   const a = meta.minA + meta.sa * u, b = meta.minB + meta.sb * w;
   const base = {

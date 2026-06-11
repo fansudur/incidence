@@ -28,7 +28,7 @@ export const PARAM_SCHEMA = [
     { key: 'terrainAmp', label: '起伏幅度 (×层高)', type: 'num', min: 0, max: 0.5, step: 0.01, def: 0.15, note: '幅度=层高×系数, 深层自动更大(W₁<W₂<W₃); 太高会挡住后层(作者预言过的遮挡)' },
     { key: 'terrainWaves', label: '起伏尺度 (波数)', type: 'num', min: 1, max: 8, step: 0.5, def: 3, note: '一层里大约几座山; 小=缓丘, 大=碎丘' },
     { key: 'terrainSeed', label: '地形种子', type: 'int', min: 1, max: 999, step: 1, def: 7, note: '换一个数=换一套地貌; 同种子永远长同样的山' },
-    { key: 'terrainHead', label: '前缘贴地深度 (×层深)', type: 'num', min: 0, max: 0.6, step: 0.05, def: 0.25, note: '每块地形朝观者的前脸贴地收平(不露剖切墙), 在此深度内渐升到全幅; 0=关闭' },
+    { key: 'terrainHead', label: '首层前缘贴地 (×层深)', type: 'num', min: 0, max: 0.6, step: 0.05, def: 0.25, note: '仅第一层面对M₁的前边贴地(它前面无可衔接物); 其余层正常起伏, 接缝靠对齐衔接隐藏(近脊遮远口)' },
     { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照); 脚自动贴地形' },
   ] },
   { folder: '多世界 (一生二三)', items: [
