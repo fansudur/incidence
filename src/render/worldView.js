@@ -5,6 +5,7 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection } from '../core/activity.js';
 import { terrainOnPlane, pointAt } from '../core/terrain.js';
+import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
@@ -82,16 +83,27 @@ function buildSingleWorld(params, base = 0) {
     }
   }
 
-  // 地形 (起伏·按层·安全区内): 基面=该层锥底斜面 (Σ 视角下塌到画面下边缘 → 地形从画面底边长起, 无悬空);
-  // 形状画在基面归一化标架+种子固定 → 随安全区伸缩不跳变; 幅度=层高×系数; 边缘全幅度切断+垂直裙边(剖切模型感)
-  const tOpts = { seed: Math.round(params.terrainSeed ?? 7), ampRatio: params.terrainAmp ?? 0.15, waves: params.terrainWaves ?? 3 };
+  // 地形 (起伏·按层·安全区内): 基面=层底斜面(Σ视角塌到画面下边缘, 无悬空); 噪声场画在【展开连续坐标】
+  // (s=沿光路累计深度, w=横向/半宽)上, 三层共用 → 相邻层在镜面接缝处高度严格相等(反射不变性), 读成一片连续大地;
+  // 深度包络 M₁→M₂ 渐起(最前景趋平不挡后层); 边缘全幅度切断+垂直裙边(剖切模型感)
   const terrains = []; // [ {gap, grid} ] — 人物落点采样复用
   if (params.showTerrain && !bug && mcPlain.length >= 2) {
+    const bm = data.beam;                                       // [Σ, M₁心, M₂心, ...] 中心光路(水平)
+    const S = [0];                                               // 展开累计深度
+    for (let i = 1; i < bm.length; i++) S.push(S[i - 1] + vdist(bm[i - 1], bm[i]));
+    const fpBase = {
+      hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist, // 锥高·半宽 随深度的斜率
+      rampA: S[1], rampB: S[2],                                  // 包络: M₁ 处 0 → M₂ 处满
+      seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
+    };
     for (const r of safeRegions(mcPlain, data.seed)) {
       const g = r.gap;
-      if (g + 1 >= mcPlain.length) continue;
-      const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点 (本镜下左/下右+次镜下右)
-      const grid = terrainOnPlane(r.points, basePts, tOpts);
+      if (g + 2 >= bm.length || g + 1 >= mcPlain.length) continue;
+      const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));             // 该段光路方向(水平)
+      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递 = rot90(dir)×(-1)^g, 否则接缝两侧 w 左右颠倒
+      const fp = { ...fpBase, P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
+      const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
+      const grid = terrainOnPlane(r.points, basePts, fp);
       if (grid) { terrains.push({ gap: g, grid }); root.add(buildTerrain(grid)); }
     }
   }
