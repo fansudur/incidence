@@ -96,16 +96,17 @@ function buildSingleWorld(params, base = 0) {
       rampA: S[1], rampB: S[2],                                  // 包络: M₁ 处 0 → M₂ 处满
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
     };
-    // 范围 = 视锥底面整条带(镜g下边→镜g+1下边), 不是安全区底面: 安全区是人/布景的约束, 地面铺满锥底;
-    // 相邻带共享镜面下边线 + 全局场在该线两侧严格相等 → 接缝闭合(对所有镜面默认成立, 作者规则)。
-    // 已知代价: 带子近镜端落在红区, 会被邻链二次看到(重影); 连续地形预期仍读作地面, 刺眼再衰减。
-    for (let g = 0; g < mcPlain.length - 1; g++) {
-      if (g + 2 >= bm.length) continue;
+    // 范围 = 黄色安全区(作者选定): 红区腾空 → 重影/跨层遮挡/跨链阴影三个隐患清零;
+    // 代价(作者知情接受): 每道镜缝处可见切割边缘+空带, 作为剖切模型语言的一部分。
+    // 接缝两侧的高度轮廓仍出自同一个全局连续场("整体大地形") → 跨缝地貌天然对位。
+    for (const r of safeRegions(mcPlain, data.seed)) {
+      const g = r.gap;
+      if (g + 2 >= bm.length || g + 1 >= mcPlain.length) continue;
       const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));             // 该段光路方向(水平)
-      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递 = rot90(dir)×(-1)^g, 否则接缝两侧 w 左右颠倒
+      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递 = rot90(dir)×(-1)^g, 否则跨缝地貌左右颠倒
       const fp = { ...fpBase, P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
       const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
-      const grid = terrainOnPlane([...mcPlain[g], ...mcPlain[g + 1]], basePts, fp); // 整段锥 8 角 → 底面=完整地面带
+      const grid = terrainOnPlane(r.points, basePts, fp);
       if (grid) { terrains.push({ gap: g, grid }); root.add(buildTerrain(grid)); }
     }
   }
