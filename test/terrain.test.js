@@ -2,7 +2,7 @@
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
 import { safeRegions } from '../src/core/activity.js';
-import { terrainOnPlane, pointAt, liftField } from '../src/core/terrain.js';
+import { terrainOnPlane, pointAt, liftField, liftAt } from '../src/core/terrain.js';
 import { v, sub, dot, cross, normalize, dist, lerp, scale, add } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
@@ -103,6 +103,24 @@ test('地形(连续场): 锥8角输入→整条带 / 安全区输入→更小 (C
   assert(strip && safe, '两种输入都应能生成');
   const area2 = (m) => m.sa * m.sb;                              // 包围盒面积近似比较
   assert(area2(strip.meta) > area2(safe.meta) * 1.3, `整条带(${area2(strip.meta).toFixed(2)})应明显大于安全区底面(${area2(safe.meta).toFixed(2)})`);
+});
+
+test('地形(连续场): 前缘贴地 — 最近端抬升严格为0(前脸无剖切墙), 最深端不受影响', () => {
+  const { mc, regions, frame } = setup();
+  const basePts = [mc[1][2], mc[1][3], mc[2][3]];                // 第二层(作者标过切面的层)
+  const f = { ...frame(1), headFrac: 0.25 };
+  const g = terrainOnPlane(regions[1].points, basePts, f);
+  assert(g, '应能生成');
+  const m = g.meta;
+  const to3D = (q) => v(m.pa.x + m.e1.x * q.a + m.e2.x * q.b, m.pa.y + m.e1.y * q.a + m.e2.y * q.b, m.pa.z + m.e1.z * q.a + m.e2.z * q.b);
+  const sOf = (p) => f.S0 + (p.x - f.P0.x) * f.dir.x + (p.y - f.P0.y) * f.dir.y + (p.z - f.P0.z) * f.dir.z;
+  const hull3 = m.hull2.map(to3D);
+  hull3.sort((a, b) => sOf(a) - sOf(b));
+  const nearPt = hull3[0], farPt = hull3[hull3.length - 1];
+  assert(Math.abs(liftAt(m, nearPt).lift) < 1e-9, `最近端抬升应为0, 实际 ${liftAt(m, nearPt).lift}`);
+  assert(Math.abs(liftAt(m, farPt).lift - liftField(f, farPt).lift) < 1e-9, '最深端应不受贴地影响(=原始场)');
+  const off = terrainOnPlane(regions[1].points, basePts, frame(1)); // headFrac 缺省=0 → 关闭
+  assert(Math.abs(liftAt(off.meta, nearPt).lift - liftField(off.meta.fp, nearPt).lift) < 1e-12, 'headFrac=0 应与原始场逐点一致');
 });
 
 test('地形(连续场): ampRatio=0 → 全贴基面; pointAt 与 liftField 一致', () => {

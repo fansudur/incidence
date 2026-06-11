@@ -51,6 +51,22 @@ export function liftField(fp, p) {
   return { lift: fp.ampRatio * fp.hSlope * s * ramp * t, t };
 }
 
+// 前缘贴地: 每块地形在自己范围内, 从最近端(s 最小)起一段深度内抬升渐入(0→全幅)。
+// 作者规则: 朝向观者的"前脸"必须贴地, 不许有正对画面的剖切墙(侧/背剖切保留)。
+// headFrac = 贴地段占该块深度的比例 (0=关闭); 存于 meta, 采样与生成同函数。
+function headFade(meta, s) {
+  if (!meta.headLen) return 1;
+  const t = (s - meta.sMin) / meta.headLen;
+  const c = Math.max(0, Math.min(1, t));
+  return c * c * (3 - 2 * c);
+}
+// 表面抬升采样 (生成/人物落点共用): 基面点 → 全局场 × 前缘贴地
+export function liftAt(meta, basePoint) {
+  const L = liftField(meta.fp, basePoint);
+  const s = meta.fp.S0 + dot(sub(basePoint, meta.fp.P0), meta.fp.dir);
+  return { lift: L.lift * headFade(meta, s), t: L.t };
+}
+
 // ── 主函数: 安全区点集 + 基面三点 + 场参数 → 地形网格(纯数据) ────────────────
 // 返回 { positions, indices, rel, meta } | null。rel: 表面顶点=噪声相对值0..1, 裙边底=-1 (着色用)。
 export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
@@ -66,7 +82,11 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
   for (const q of hull2) { minA = Math.min(minA, q.a); maxA = Math.max(maxA, q.a); minB = Math.min(minB, q.b); maxB = Math.max(maxB, q.b); }
   const sa = maxA - minA || 1e-9, sb = maxB - minB || 1e-9;
-  const meta = { pa, n, e1, e2, minA, minB, sa, sb, hull2, fp };
+  const sOf = (p) => fp.S0 + dot(sub(p, fp.P0), fp.dir);        // 展开深度
+  let sMin = Infinity, sMax = -Infinity;
+  for (const p of hull) { const s = sOf(p); sMin = Math.min(sMin, s); sMax = Math.max(sMax, s); }
+  const headLen = (fp.headFrac ?? 0) * Math.max(1e-9, sMax - sMin); // 前缘贴地段深度
+  const meta = { pa, n, e1, e2, minA, minB, sa, sb, hull2, fp, sMin, headLen };
 
   const inside2 = (a, b) => {
     let sign = 0;
@@ -87,7 +107,7 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
     const idx = i * N + j;
     inside[idx] = inside2(a, b) ? 1 : 0;
     const base = { x: pa.x + e1.x * a + e2.x * b, y: pa.y + e1.y * a + e2.y * b, z: pa.z + e1.z * a + e2.z * b };
-    const L = inside[idx] ? liftField(fp, base) : { lift: 0, t: 0 };
+    const L = inside[idx] ? liftAt(meta, base) : { lift: 0, t: 0 };
     positions.push(base.x, base.y + L.lift, base.z);
     rel.push(L.t);
     lifts.push(L.lift);
@@ -122,7 +142,7 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   return { positions: new Float32Array(positions), indices: new Uint32Array(tris), rel: new Float32Array(rel), meta };
 }
 
-// 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 全局场抬升 (人物落点/行走路径用, 与生成同一函数)
+// 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 全局场抬升×前缘贴地 (人物落点/行走路径用, 与生成同一函数)
 export function pointAt(meta, u, w) {
   const a = meta.minA + meta.sa * u, b = meta.minB + meta.sb * w;
   const base = {
@@ -130,5 +150,5 @@ export function pointAt(meta, u, w) {
     y: meta.pa.y + meta.e1.y * a + meta.e2.y * b,
     z: meta.pa.z + meta.e1.z * a + meta.e2.z * b,
   };
-  return v(base.x, base.y + liftField(meta.fp, base).lift, base.z);
+  return v(base.x, base.y + liftAt(meta, base).lift, base.z);
 }

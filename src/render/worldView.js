@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection } from '../core/activity.js';
-import { terrainOnPlane, liftField } from '../core/terrain.js';
+import { terrainOnPlane, liftAt } from '../core/terrain.js';
 import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
@@ -95,6 +95,7 @@ function buildSingleWorld(params, base = 0) {
       hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist, // 锥高·半宽 随深度的斜率
       rampA: S[1], rampB: S[2],                                  // 包络: M₁ 处 0 → M₂ 处满
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
+      headFrac: params.terrainHead ?? 0.25,                      // 前缘贴地深度(×层深): 前脸不许有剖切墙(作者规则)
     };
     // 范围 = 黄色安全区(作者选定): 红区腾空 → 重影/跨层遮挡/跨链阴影三个隐患清零;
     // 代价(作者知情接受): 每道镜缝处可见切割边缘+空带, 作为剖切模型语言的一部分。
@@ -123,7 +124,7 @@ function buildSingleWorld(params, base = 0) {
       if (sec) {
         const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
         const bp = { x: c.x / sec.length, y: c.y / sec.length, z: c.z / sec.length };
-        foot = new THREE.Vector3(bp.x, bp.y + liftField(m.fp, bp).lift, bp.z);
+        foot = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);
       }
     } else if (sr.length) {
       const sec = groundSection(sr[0].points, gY);
