@@ -6,31 +6,25 @@
 <title>∅ | UN</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #07090d; }
-  #info {
-    position: fixed; left: 12px; top: 10px; z-index: 10;
-    font: 12px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    color: #aeb6c2; text-shadow: 0 1px 2px #000; pointer-events: none; max-width: 360px;
+  #info { /* 左上角项目标识: 符号 + 名字, 仅此而已(几何本身承载意义, 不需要文字解说) */
+    position: fixed; left: 14px; top: 12px; z-index: 10;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    text-shadow: 0 1px 2px #000; pointer-events: none; user-select: none;
   }
-  #info b { color: #fff; }
-  #info .r { color: #ff5a5a; } #info .g { color: #59e07a; } #info .b { color: #5aa6ff; }
-  #info .ray { color: #ffd070; } #info .box { color: #ffd700; } #info .dim { color: #7f8a99; }
+  #mark { font-size: 17px; letter-spacing: 0.18em; color: #e6eef8; }
+  #markName { font-size: 11px; letter-spacing: 0.3em; color: #7f8a99; margin-top: 2px; }
   #warn {
     position: fixed; left: 12px; bottom: 12px; z-index: 10;
     font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     color: #ff5ad0; text-shadow: 0 1px 2px #000; pointer-events: none; display: none; max-width: 60%;
   }
-  /* 移动端: 左上角说明文字暂时隐藏(技术细节待换成装置理念文案), 侧边栏由 JS 默认收起 */
-  @media (max-width: 768px) {
-    #info { display: none; }
-  }
+  /* 移动端: 侧边栏由 JS 默认收起; 标识两行不挡画面, 各端均显示 */
 </style>
 </head>
 <body>
 <div id="info">
-  <b>镜面反射装置</b> — 视锥追迹 · 真实尺度<br/>
-  Σ → F 四角发散视锥 → M₁/M₂/M₃ (各自角度/间距)，<span class="ray">镜面=视锥截面</span><br/>
-  随距离放大：<span class="r">W₁红</span> · <span class="g">W₂绿</span> · <span class="b">W₃蓝</span>；<span class="box">黄框=布景范围</span><br/>
-  <span class="dim">尺寸 = .gh 原始单位 (网格 1 格 = 100)</span> · 拖拽旋转 / 滚轮缩放 / 右键平移
+  <div id="mark">∅ | UN</div>
+  <div id="markName">Incidence</div>
 </div>
 <div id="warn"></div>
 
