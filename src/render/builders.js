@@ -123,6 +123,26 @@ export function buildGround(poly, colorHex) {
   }));
 }
 
+// 地形 (CORE terrainGrid 产物 → mesh): 顶点色按海拔插值(谷暗坡亮), 无图片贴图 → 无失真且 PT/光栅一致
+export function buildTerrain(grid, lowHex = 0x5f5a4e, highHex = 0xd9d3c5) {
+  const { positions, indices, meta } = grid;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+  geo.computeVertexNormals();
+  const lo = new THREE.Color(lowHex), hi = new THREE.Color(highHex), c = new THREE.Color();
+  const colors = new Float32Array(positions.length);
+  for (let i = 0; i < positions.length / 3; i++) {
+    const t = meta.amp > 1e-9 ? Math.max(0, Math.min(1, (positions[i * 3 + 1] - meta.h) / meta.amp)) : 0;
+    c.lerpColors(lo, hi, t);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    vertexColors: true, metalness: 0.0, roughness: 0.93, side: THREE.DoubleSide,
+  }));
+}
+
 // 占位人形 (低模: 胶囊身 + 球头): 脚立在 foot, 沿 up 朝向 (默认世界竖直=重力方向)。
 // height = 身高(场景单位)。先验证站位/受光/反射, 之后再换精模或加走动。
 export function buildFigure(foot, up, height, colorHex) {

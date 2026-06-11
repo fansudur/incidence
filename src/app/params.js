@@ -21,10 +21,14 @@ export const PARAM_SCHEMA = [
     { key: 'skyTop', label: '天空顶色', type: 'color', def: '#4a78b8', ref: 'skyTop' },
     { key: 'skyHorizon', label: '地平线色', type: 'color', def: '#d8c4a8', ref: 'skyHorizon' },
   ] },
-  { folder: '地面与人物', items: [
-    { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: false, note: '默认隐藏(作者: 平坦灰地反而压缩空间感, 待地形起伏拉开深浅); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
-    { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 取景框下边=-frameH/2; 越低地面越晚进入画面' },
-    { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照)' },
+  { folder: '地面·地形·人物', items: [
+    { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: false, note: '默认隐藏(作者: 平坦灰地反而压缩空间感, 用地形起伏拉深浅); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
+    { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 取景框下边=-frameH/2; 地形基面同用此高度' },
+    { key: 'showTerrain', label: '地形 (起伏·按层)', type: 'bool', def: true, note: '每层安全区内的噪声地形; 形状归一化+种子固定→随安全区伸缩不跳变; 永不越出安全区' },
+    { key: 'terrainAmp', label: '起伏幅度 (×层高)', type: 'num', min: 0, max: 0.5, step: 0.01, def: 0.15, note: '幅度=层高×系数, 深层自动更大(W₁<W₂<W₃); 太高会挡住后层(作者预言过的遮挡)' },
+    { key: 'terrainWaves', label: '起伏尺度 (波数)', type: 'num', min: 1, max: 8, step: 0.5, def: 3, note: '一层里大约几座山; 小=缓丘, 大=碎丘' },
+    { key: 'terrainSeed', label: '地形种子', type: 'int', min: 1, max: 999, step: 1, def: 7, note: '换一个数=换一套地貌; 同种子永远长同样的山' },
+    { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照); 脚自动贴地形' },
   ] },
   { folder: '多世界 (一生二三)', items: [
     { key: 'worldCount', label: '世界数 N', type: 'int', min: 1, max: 6, step: 1, def: 1, gh: '8/11', note: 'N=2→C₂; N=3→C₃' },

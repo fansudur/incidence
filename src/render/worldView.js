@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection } from '../core/activity.js';
-import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildFigure } from './builders.js';
+import { terrainGrid, heightAt } from '../core/terrain.js';
+import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
 // 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug }。
@@ -81,14 +82,27 @@ function buildSingleWorld(params, base = 0) {
     }
   }
 
-  // 占位人: 站在水平地面上(重力竖直), 位置 = 第一层安全区在地面高度的截面质心 (安全区约束防穿帮)
+  // 地形 (起伏·按层·安全区内): 每层安全区 footprint 上的噪声高度场 (CORE terrainGrid, 形状归一化+种子固定
+  // → 参数动则随安全区伸缩, 山不跳变; 幅度=层高×系数 → 深层世界自动更大; 全内三角发射 → 永不越出安全区)
+  const tOpts = { seed: Math.round(params.terrainSeed ?? 7), ampRatio: params.terrainAmp ?? 0.15, waves: params.terrainWaves ?? 3 };
+  const terrains = []; // [ {gap, grid} ] — 人物落点采样复用
+  if (params.showTerrain && !bug && mcPlain.length >= 2) {
+    for (const r of safeRegions(mcPlain, data.seed)) {
+      const grid = terrainGrid(r.points, gY, tOpts);
+      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid)); }
+    }
+  }
+
+  // 占位人: 站在第一层安全区(防穿帮), 有地形时脚贴地形高度, 否则贴水平地面
   if (params.showFigures && !bug && mcPlain.length >= 2) {
     const sr = safeRegions(mcPlain, data.seed);
     const sec = sr.length ? groundSection(sr[0].points, gY) : null;
     if (sec) {
       const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
-      const foot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length);
-      root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
+      const fx = c.x / sec.length, fz = c.z / sec.length;
+      const t0 = terrains.find((t) => t.gap === sr[0].gap);
+      const fy = t0 ? heightAt(t0.grid.meta, fx, fz) : gY;   // 脚点贴地形(与生成同一函数)
+      root.add(buildFigure(new THREE.Vector3(fx, fy, fz), new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
     } // 地面高度不穿过第一层安全区时无处可站 → 不放人
   }
 
