@@ -133,10 +133,12 @@ export function splitFloorByNextCone(poly, near, far) {
 export function planeSection(points, p0, n) {
   const nn = normalize(n);
   const sdp = (p) => dot(sub(p, p0), nn);
+  const EPS = 1e-9; // 容差: 贴面点(如"锥体被自己的底面切"时的底角)直接收进截面, 防 1e-17 级抖动把截面掐成一点
   const pts = [];
+  for (const p of points) if (Math.abs(sdp(p)) <= EPS) pts.push(p);
   for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
     const a = points[i], b = points[j], da = sdp(a), db = sdp(b);
-    if ((da <= 0 && db > 0) || (da > 0 && db <= 0)) pts.push(lerp(a, b, da / (da - db)));
+    if ((da < -EPS && db > EPS) || (da > EPS && db < -EPS)) pts.push(lerp(a, b, da / (da - db)));
   }
   if (pts.length < 3) return null;
   // 平面内 2D 标架 (e1 ⊥ n, e2 = n × e1)

@@ -3,8 +3,8 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection } from '../core/activity.js';
-import { terrainOnPlane, pointAt } from '../core/terrain.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection } from '../core/activity.js';
+import { terrainOnPlane, liftField } from '../core/terrain.js';
 import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
@@ -96,25 +96,35 @@ function buildSingleWorld(params, base = 0) {
       rampA: S[1], rampB: S[2],                                  // 包络: M₁ 处 0 → M₂ 处满
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
     };
-    for (const r of safeRegions(mcPlain, data.seed)) {
-      const g = r.gap;
-      if (g + 2 >= bm.length || g + 1 >= mcPlain.length) continue;
+    // 范围 = 视锥底面整条带(镜g下边→镜g+1下边), 不是安全区底面: 安全区是人/布景的约束, 地面铺满锥底;
+    // 相邻带共享镜面下边线 + 全局场在该线两侧严格相等 → 接缝闭合(对所有镜面默认成立, 作者规则)。
+    // 已知代价: 带子近镜端落在红区, 会被邻链二次看到(重影); 连续地形预期仍读作地面, 刺眼再衰减。
+    for (let g = 0; g < mcPlain.length - 1; g++) {
+      if (g + 2 >= bm.length) continue;
       const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));             // 该段光路方向(水平)
       const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递 = rot90(dir)×(-1)^g, 否则接缝两侧 w 左右颠倒
       const fp = { ...fpBase, P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
       const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
-      const grid = terrainOnPlane(r.points, basePts, fp);
+      const grid = terrainOnPlane([...mcPlain[g], ...mcPlain[g + 1]], basePts, fp); // 整段锥 8 角 → 底面=完整地面带
       if (grid) { terrains.push({ gap: g, grid }); root.add(buildTerrain(grid)); }
     }
   }
 
-  // 占位人: 站在第一层安全区(防穿帮); 有地形时立在其表面中心(pointAt 与生成同函数, 脚必贴地), 否则水平地面
+  // 占位人: 站在第一层【安全区】中心(地形虽铺满整条带, 但带中心在红区会被两条镜链看成重影 — 实测出现过两个人);
+  // 脚点 = 安全区底面质心的 (x,z) → liftField 抬升(与地形同一函数, 脚必贴地)
   if (params.showFigures && !bug && mcPlain.length >= 2) {
     const sr = safeRegions(mcPlain, data.seed);
     const t0 = sr.length ? terrains.find((t) => t.gap === sr[0].gap) : null;
     let foot = null;
-    if (t0) { const p = pointAt(t0.grid.meta, 0.5, 0.5); foot = new THREE.Vector3(p.x, p.y, p.z); }
-    else if (sr.length) {
+    if (t0 && sr.length) {
+      const m = t0.grid.meta;
+      const sec = planeSection(sr[0].points, m.pa, m.n);          // 安全区在该层底斜面上的截面
+      if (sec) {
+        const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
+        const bp = { x: c.x / sec.length, y: c.y / sec.length, z: c.z / sec.length };
+        foot = new THREE.Vector3(bp.x, bp.y + liftField(m.fp, bp).lift, bp.z);
+      }
+    } else if (sr.length) {
       const sec = groundSection(sr[0].points, gY);
       if (sec) { const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 }); foot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length); }
     }
