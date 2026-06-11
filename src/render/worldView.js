@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection } from '../core/activity.js';
-import { terrainGrid, heightAt } from '../core/terrain.js';
+import { terrainOnPlane, pointAt } from '../core/terrain.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
@@ -82,28 +82,31 @@ function buildSingleWorld(params, base = 0) {
     }
   }
 
-  // 地形 (起伏·按层·安全区内): 每层安全区 footprint 上的噪声高度场 (CORE terrainGrid, 形状归一化+种子固定
-  // → 参数动则随安全区伸缩, 山不跳变; 幅度=层高×系数 → 深层世界自动更大; 全内三角发射 → 永不越出安全区)
+  // 地形 (起伏·按层·安全区内): 基面=该层锥底斜面 (Σ 视角下塌到画面下边缘 → 地形从画面底边长起, 无悬空);
+  // 形状画在基面归一化标架+种子固定 → 随安全区伸缩不跳变; 幅度=层高×系数; 边缘全幅度切断+垂直裙边(剖切模型感)
   const tOpts = { seed: Math.round(params.terrainSeed ?? 7), ampRatio: params.terrainAmp ?? 0.15, waves: params.terrainWaves ?? 3 };
   const terrains = []; // [ {gap, grid} ] — 人物落点采样复用
   if (params.showTerrain && !bug && mcPlain.length >= 2) {
     for (const r of safeRegions(mcPlain, data.seed)) {
-      const grid = terrainGrid(r.points, gY, tOpts);
-      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid)); }
+      const g = r.gap;
+      if (g + 1 >= mcPlain.length) continue;
+      const basePts = [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点 (本镜下左/下右+次镜下右)
+      const grid = terrainOnPlane(r.points, basePts, tOpts);
+      if (grid) { terrains.push({ gap: g, grid }); root.add(buildTerrain(grid)); }
     }
   }
 
-  // 占位人: 站在第一层安全区(防穿帮), 有地形时脚贴地形高度, 否则贴水平地面
+  // 占位人: 站在第一层安全区(防穿帮); 有地形时立在其表面中心(pointAt 与生成同函数, 脚必贴地), 否则水平地面
   if (params.showFigures && !bug && mcPlain.length >= 2) {
     const sr = safeRegions(mcPlain, data.seed);
-    const sec = sr.length ? groundSection(sr[0].points, gY) : null;
-    if (sec) {
-      const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
-      const fx = c.x / sec.length, fz = c.z / sec.length;
-      const t0 = terrains.find((t) => t.gap === sr[0].gap);
-      const fy = t0 ? heightAt(t0.grid.meta, fx, fz) : gY;   // 脚点贴地形(与生成同一函数)
-      root.add(buildFigure(new THREE.Vector3(fx, fy, fz), new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
-    } // 地面高度不穿过第一层安全区时无处可站 → 不放人
+    const t0 = sr.length ? terrains.find((t) => t.gap === sr[0].gap) : null;
+    let foot = null;
+    if (t0) { const p = pointAt(t0.grid.meta, 0.5, 0.5); foot = new THREE.Vector3(p.x, p.y, p.z); }
+    else if (sr.length) {
+      const sec = groundSection(sr[0].points, gY);
+      if (sec) { const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 }); foot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length); }
+    }
+    if (foot) root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
   }
 
   // 活动空间(布尔差集的输入): 各镜面间的截头锥段 + 4 个复用点(M_g 长边 / M_{g+1} 短边)

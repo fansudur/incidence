@@ -123,18 +123,19 @@ export function buildGround(poly, colorHex) {
   }));
 }
 
-// 地形 (CORE terrainGrid 产物 → mesh): 顶点色按海拔插值(谷暗坡亮), 无图片贴图 → 无失真且 PT/光栅一致
-export function buildTerrain(grid, lowHex = 0x5f5a4e, highHex = 0xd9d3c5) {
-  const { positions, indices, meta } = grid;
+// 地形 (CORE terrainOnPlane 产物 → mesh): 顶点色按相对高度插值(谷暗坡亮), 裙边剖面=深土色;
+// 无图片贴图 → 无失真且 PT/光栅一致
+export function buildTerrain(grid, lowHex = 0x5f5a4e, highHex = 0xd9d3c5, cutHex = 0x37322b) {
+  const { positions, indices, rel } = grid;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setIndex(new THREE.BufferAttribute(indices, 1));
   geo.computeVertexNormals();
-  const lo = new THREE.Color(lowHex), hi = new THREE.Color(highHex), c = new THREE.Color();
+  const lo = new THREE.Color(lowHex), hi = new THREE.Color(highHex), cut = new THREE.Color(cutHex), c = new THREE.Color();
   const colors = new Float32Array(positions.length);
-  for (let i = 0; i < positions.length / 3; i++) {
-    const t = meta.amp > 1e-9 ? Math.max(0, Math.min(1, (positions[i * 3 + 1] - meta.h) / meta.amp)) : 0;
-    c.lerpColors(lo, hi, t);
+  for (let i = 0; i < rel.length; i++) {
+    if (rel[i] < 0) c.copy(cut);                                  // 裙边底 = 剖面色 (插值后切面呈土层渐暗)
+    else c.lerpColors(lo, hi, Math.max(0, Math.min(1, rel[i])));
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));

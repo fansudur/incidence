@@ -1,64 +1,89 @@
-// 锁住地形: 确定性(同种子同山)、安全区约束(永不越界)、随参数伸缩、幅度=层高×系数。
+// 锁住地形(斜面基面版): 确定性、不越出安全区、抬升在 [0,amp]、裙边贴基面、随参数伸缩不跳变。
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
-import { safeRegions, groundSection, polyArea } from '../src/core/activity.js';
-import { terrainGrid, heightAt } from '../src/core/terrain.js';
-import { v } from '../src/core/vec.js';
+import { safeRegions } from '../src/core/activity.js';
+import { terrainOnPlane, pointAt } from '../src/core/terrain.js';
+import { v, sub, dot, cross, normalize } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
 const S = v(0, 0, 0);
-const H = -0.3;
-function region0(p = base) { const r = traceFrustum(p); const mc = r.endMirror ? [...r.mirrors, r.endMirror] : r.mirrors; return safeRegions(mc, S)[0]; }
+function setup(p = base) {
+  const r = traceFrustum(p);
+  const mc = r.endMirror ? [...r.mirrors, r.endMirror] : r.mirrors;
+  const reg = safeRegions(mc, S)[0];
+  return { reg, basePts: [mc[0][2], mc[0][3], mc[1][3]] };
+}
+function planeUp(basePts) { // 基面朝上法向 + y_base(x,z)
+  const [pa, pb, pc] = basePts;
+  let n = normalize(cross(sub(pb, pa), sub(pc, pa)));
+  if (n.y < 0) n = v(-n.x, -n.y, -n.z);
+  return { n, yBase: (x, z) => pa.y - (n.x * (x - pa.x) + n.z * (z - pa.z)) / n.y };
+}
 
-test('地形: 同种子两次生成逐字节一致 (确定性, 无 Math.random)', () => {
-  const r = region0();
-  const a = terrainGrid(r.points, H, { seed: 7 }), b = terrainGrid(r.points, H, { seed: 7 });
-  assert(a && b, '应能生成');
-  assert(a.positions.length === b.positions.length && a.positions.every((x, i) => x === b.positions[i]), '同种子应逐值一致');
-  const c = terrainGrid(r.points, H, { seed: 8 });
-  assert(c.positions.some((x, i) => x !== a.positions[i]), '换种子应得到不同地貌');
+test('地形(斜面): 同种子逐值一致, 换种子不同 (确定性)', () => {
+  const { reg, basePts } = setup();
+  const a = terrainOnPlane(reg.points, basePts, { seed: 7 });
+  const b = terrainOnPlane(reg.points, basePts, { seed: 7 });
+  const c = terrainOnPlane(reg.points, basePts, { seed: 8 });
+  assert(a && b && c, '应能生成');
+  assert(a.positions.length === b.positions.length && a.positions.every((x, i) => x === b.positions[i]), '同种子应一致');
+  assert(c.positions.some((x, i) => x !== a.positions[i]), '换种子应不同');
 });
 
-test('地形: 所有被索引顶点都在安全区 footprint 内, 高度在 [h, h+amp]', () => {
-  const r = region0();
-  const g = terrainGrid(r.points, H, { seed: 7, ampRatio: 0.2 });
-  const hull = groundSection(r.points, H);
-  const inHull = (x, z) => { // 凸包内(同侧)
+test('地形(斜面): 表面竖直抬升∈[0,amp], 裙边底点贴基面, 表面点在 footprint 内', () => {
+  const { reg, basePts } = setup();
+  const g = terrainOnPlane(reg.points, basePts, { seed: 7, ampRatio: 0.2 });
+  const { yBase } = planeUp(basePts);
+  const m = g.meta;
+  const inHull2 = (a, b) => { // 与 CORE 同判定
     let sign = 0;
-    for (let i = 0; i < hull.length; i++) {
-      const a = hull[i], b = hull[(i + 1) % hull.length];
-      const cr = (b.x - a.x) * (z - a.z) - (b.z - a.z) * (x - a.x);
+    for (let i = 0; i < m.hull2.length; i++) {
+      const p = m.hull2[i], q = m.hull2[(i + 1) % m.hull2.length];
+      const cr = (q.a - p.a) * (b - p.b) - (q.b - p.b) * (a - p.a);
       if (Math.abs(cr) < 1e-9) continue;
       if (sign === 0) sign = Math.sign(cr); else if (Math.sign(cr) !== sign) return false;
     }
     return true;
   };
   const used = new Set(g.indices);
+  let surf = 0, skirt = 0;
   for (const i of used) {
     const x = g.positions[i * 3], y = g.positions[i * 3 + 1], z = g.positions[i * 3 + 2];
-    assert(inHull(x, z), `顶点(${x.toFixed(2)},${z.toFixed(2)})应在安全区内`);
-    assert(y >= H - 1e-6 && y <= H + g.meta.amp + 1e-6, `高度 ${y} 应在 [h, h+amp]`); // 1e-6: positions 是 Float32
+    const lift = y - yBase(x, z);
+    if (g.rel[i] >= 0) { // 表面点
+      surf++;
+      assert(lift >= -1e-4 && lift <= m.amp + 1e-4, `表面抬升 ${lift} 应∈[0,amp=${m.amp.toFixed(3)}]`);
+      // 横向越界检查投【基面点】(竖直抬升不会横向出界: 安全区侧壁全为竖直平面)
+      const bp = { x, y: y - g.rel[i] * m.amp, z };
+      const a = dot(sub(bp, m.pa), m.e1), b = dot(sub(bp, m.pa), m.e2);
+      assert(inHull2(a, b), `基面投影点应在安全区 footprint 内`);
+    } else { // 裙边底点
+      skirt++;
+      assert(Math.abs(lift) < 1e-4, `裙边底应贴基面, 偏差 ${lift}`);
+    }
   }
-  assert(g.meta.amp > 0, '幅度应>0 (=层高×系数)');
+  assert(surf > 0 && skirt > 0, `应同时有表面(${surf})与裙边(${skirt}) — 切割边缘存在`);
 });
 
-test('地形: 镜面距离改变 → footprint 伸缩, 山随归一化坐标跟着变 (不失效不报错)', () => {
-  const far = { ...base, mDist: [550, 600, 634] };       // M₁→M₂ 拉远
-  const g1 = terrainGrid(region0().points, H, { seed: 7 });
-  const g2 = terrainGrid(region0(far).points, H, { seed: 7 });
+test('地形(斜面): 镜距改变 → 范围伸缩, 同 (u,v) 相对地貌不变 (山不跳变)', () => {
+  const s1 = setup(), s2 = setup({ ...base, mDist: [550, 600, 634] });
+  const g1 = terrainOnPlane(s1.reg.points, s1.basePts, { seed: 7 });
+  const g2 = terrainOnPlane(s2.reg.points, s2.basePts, { seed: 7 });
   assert(g1 && g2, '两组参数都应能生成');
-  const spanX = (g) => { let lo = 1e9, hi = -1e9; for (let i = 0; i < g.positions.length; i += 3) { lo = Math.min(lo, g.positions[i]); hi = Math.max(hi, g.positions[i]); } return hi - lo; };
-  assert(Math.abs(spanX(g2) - spanX(g1)) > 0.1, '区域变深后地形范围应明显不同');
-  // 归一化同位点的相对地貌一致: 两块地形各自中心点的 fbm 值相同(同种子同 (u,v))
-  const mid = (g) => heightAt(g.meta, g.meta.minX + g.meta.sx / 2, g.meta.minZ + g.meta.sz / 2) - g.meta.h;
-  const r1 = mid(g1) / g1.meta.amp, r2 = mid(g2) / g2.meta.amp;
-  assert(Math.abs(r1 - r2) < 0.25, `中心点相对高度应接近 (${r1.toFixed(3)} vs ${r2.toFixed(3)}) — 山不跳变`);
+  assert(Math.abs(g2.meta.sa - g1.meta.sa) + Math.abs(g2.meta.sb - g1.meta.sb) > 0.1, '范围应明显不同');
+  const relLift = (g) => { const p = pointAt(g.meta, 0.5, 0.5); const { yBase } = planeUp([g.meta.pa, v(g.meta.pa.x + g.meta.e1.x, g.meta.pa.y + g.meta.e1.y, g.meta.pa.z + g.meta.e1.z), v(g.meta.pa.x + g.meta.e2.x, g.meta.pa.y + g.meta.e2.y, g.meta.pa.z + g.meta.e2.z)]); return (p.y - yBase(p.x, p.z)) / g.meta.amp; };
+  const r1 = relLift(g1), r2 = relLift(g2);
+  assert(Math.abs(r1 - r2) < 1e-9, `同 (u,v) 同种子相对高度应严格相等 (${r1} vs ${r2})`);
 });
 
-test('地形: ampRatio=0 → 退化为平面(全在 h); footprint 面积>0', () => {
-  const r = region0();
-  const g = terrainGrid(r.points, H, { seed: 7, ampRatio: 0 });
+test('地形(斜面): ampRatio=0 → 表面退化为基面(无起伏)', () => {
+  const { reg, basePts } = setup();
+  const g = terrainOnPlane(reg.points, basePts, { seed: 7, ampRatio: 0 });
+  const { yBase } = planeUp(basePts);
   const used = new Set(g.indices);
-  for (const i of used) assert(Math.abs(g.positions[i * 3 + 1] - H) < 1e-6, '幅度0应全平'); // 1e-6: Float32 存 -0.3 有 ~1e-8 舍入
-  assert(polyArea(groundSection(r.points, H)) > 0, 'footprint 应有面积');
+  for (const i of used) {
+    if (g.rel[i] < 0) continue;
+    const x = g.positions[i * 3], y = g.positions[i * 3 + 1], z = g.positions[i * 3 + 2];
+    assert(Math.abs(y - yBase(x, z)) < 1e-4, '幅度0应全贴基面');
+  }
 });
