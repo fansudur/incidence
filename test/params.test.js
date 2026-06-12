@@ -25,7 +25,7 @@ test('schema 每项格式合法', () => {
 test('ref 集合锁: index.html 用可选链消费 ctrls[ref], 改名/误删会静默失效 — 此测试把已知清单钉死', () => {
   const refs = [];
   for (const grp of PARAM_SCHEMA) for (const it of grp.items) if (it.ref) refs.push(it.ref);
-  const expect = ['autoPlay', 'expand', 'figureFixed', 'pathTrace', 'ptBounces', 'ptSamples', 'ptScale',
+  const expect = ['autoPlay', 'expand', 'figureFixed', 'figureWalk', 'pathTrace', 'ptBounces', 'ptSamples', 'ptScale',
     'realMirror', 'showBug', 'showUsable', 'skyHorizon', 'skyTop', 'sunAz', 'sunEl', 'sunIntensity'];
   assert(JSON.stringify(refs.slice().sort()) === JSON.stringify(expect),
     `ref 集合变了: 实际 [${refs.sort().join(',')}] — 若是有意增删, 同步更新此清单与 index.html 的消费处`);

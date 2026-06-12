@@ -268,6 +268,38 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   return { positions: new Float32Array(positions), indices: new Uint32Array(tris), rel: new Float32Array(rel), meta };
 }
 
+// 行走环线: 安全区 footprint 凸包向质心收缩后(默认 0.55, 稳在安全区内)的周线, 按弧长均匀参数化。
+// t∈[0,1) 绕一圈; 返回 { point(表面3D点, 脚贴地形—与生成同一采样), perimeter(周长, 调用方用于匀速) }。
+export function loopPoint(meta, t, shrink = 0.55) {
+  const h = meta.hull2;
+  let ca = 0, cb = 0;
+  for (const q of h) { ca += q.a; cb += q.b; }
+  ca /= h.length; cb /= h.length;
+  const pts = h.map((q) => ({ a: ca + (q.a - ca) * shrink, b: cb + (q.b - cb) * shrink }));
+  const segs = [];
+  let per = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const L = Math.hypot(q.a - p.a, q.b - p.b);
+    segs.push({ p, q, L }); per += L;
+  }
+  let d = (((t % 1) + 1) % 1) * per;
+  for (const sgm of segs) {
+    if (d <= sgm.L) {
+      const k = sgm.L > 1e-12 ? d / sgm.L : 0;
+      const a = sgm.p.a + (sgm.q.a - sgm.p.a) * k, b = sgm.p.b + (sgm.q.b - sgm.p.b) * k;
+      const base = {
+        x: meta.pa.x + meta.e1.x * a + meta.e2.x * b,
+        y: meta.pa.y + meta.e1.y * a + meta.e2.y * b,
+        z: meta.pa.z + meta.e1.z * a + meta.e2.z * b,
+      };
+      return { point: v(base.x, base.y + liftAt(meta, base).lift, base.z), perimeter: per };
+    }
+    d -= sgm.L;
+  }
+  return { point: pointAt(meta, 0.5, 0.5), perimeter: per }; // 数值兜底(浮点累计误差走到段外)
+}
+
 // 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 抬升 (人物落点/行走路径用, 与生成同一函数)
 export function pointAt(meta, u, w) {
   const a = meta.minA + meta.sa * u, b = meta.minB + meta.sb * w;

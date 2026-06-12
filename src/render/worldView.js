@@ -126,7 +126,7 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
   //  跟随模式(默认): 脚点=第一层安全区质心(防重影), 参数动人跟着区域走;
   //  固定模式(runtime.fixedFoot): 人钉在世界坐标(x,y,z 全固定)不动 — 拖镜距/取景框让分层扫过他
   //    → Σ 看到 单见(层1)→重影(红区, 两个他)→换层(层2, 尺寸/深度/手性变) = 人不动的空间穿越。
-  let figFoot = null;
+  let figFoot = null, figObj = null;
   if (params.showFigures && !bug && mcPlain.length >= 2) {
     if (runtime.placed?.figure) {                 // 手动拖放过 → 存档位置优先(含对穿越钉点的覆盖)
       const p = runtime.placed.figure;
@@ -148,7 +148,7 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
         if (sec) { const c = centroid(sec); figFoot = new THREE.Vector3(c.x, gY, c.z); }
       }
     }
-    if (figFoot) root.add(buildFigure(figFoot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
+    if (figFoot) { figObj = buildFigure(figFoot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U); root.add(figObj); }
   }
 
   // 活动空间(布尔差集的输入): 各镜面间的截头锥段 + 4 个复用点(M_g 长边 / M_{g+1} 短边)
@@ -206,20 +206,22 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     }
   }
   if (bug) root.add(buildSphere(beam[beam.length - 1], 1, 0xff5ad0, sR * 1.4));
-  return { root, bug, foot: figFoot };
+  // walkMeta = 层1 地形 meta(行走环线在它上面采样); figure = 人物对象(行走时逐帧移动, 不重建)
+  const walkMeta = terrains.find((t) => t.gap === 0)?.grid.meta ?? null;
+  return { root, bug, foot: figFoot, figure: figObj, walkMeta };
 }
 
 // 多世界: 绕 Y 均分旋转复制; 返回合并 group + 最深穿帮层(0=无) + 首世界人物脚点(穿越模式捕获用)。
 export function buildAllWorlds(params, runtime = {}) {
   const all = new THREE.Group();
-  let bugLayer = 0, foot = null;
+  let bugLayer = 0, foot = null, figure = null, walkMeta = null;
   const N = Math.max(1, Math.round(params.worldCount));
   for (let k = 0; k < N; k++) {
     const w = buildSingleWorld(params, k * Math.round(params.layerCount), runtime);
     w.root.rotation.y = (2 * Math.PI / N) * k;
     all.add(w.root);
     bugLayer = Math.max(bugLayer, w.bug);
-    if (k === 0) foot = w.foot;
+    if (k === 0) { foot = w.foot; figure = w.figure; walkMeta = w.walkMeta; } // 行走只驱动首世界
   }
-  return { group: all, bugLayer, foot };
+  return { group: all, bugLayer, foot, figure, walkMeta };
 }

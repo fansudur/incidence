@@ -48,6 +48,7 @@ import { buildGui } from './src/app/gui.js';
 import { createScene } from './src/render/scene.js';
 import { buildAllWorlds } from './src/render/worldView.js';
 import { U } from './src/core/frustum.js';               // 原始单位→渲染单位 (别再硬编码 100)
+import { loopPoint } from './src/core/terrain.js';       // 行走环线采样(安全区内, 脚贴地形)
 import { createMultiview } from './src/render/multiview.js'; // 三视口子系统(相机/控制器/路由/分隔条/渲染 自持)
 import { TransformControls } from 'three/addons/controls/TransformControls.js'; // 拖拽编辑的坐标轴手柄(C4D 式)
 import { WebGLPathTracer } from 'three-gpu-pathtracer';  // 静态导入: scene.js 已静态引该模块(天空), "按需加载"本就名存实亡且 PT 默认开
@@ -123,14 +124,16 @@ const warnEl = document.querySelector('#warn');
 let worldGroup = null, framed = false;
 let figureFixedFoot = null, lastFoot = null; // 结构性穿越: 固定模式钉住的脚点 / 最近一次计算的脚点(开启瞬间捕获)
 const placed = {}; // 拖拽编辑存档: dragId → {x,y,z} (root 局部坐标); 重建后由 worldView 重新套用
+let walkHandle = null, walkT = 0, lastWalkPos = null; // 行走: 人物/层1地形meta句柄 · 环线参数 · 最后落点(停走留位)
 function rebuild() {
   if (worldGroup) {
     gizmo.detach();                              // 旧对象即将销毁; 重建后凭 selectedDragId 重新吸附
     scene.remove(worldGroup);
     worldGroup.traverse(o => { o.geometry?.dispose?.(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
   }
-  const { group, bugLayer, foot } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
+  const { group, bugLayer, foot, figure, walkMeta } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
   if (foot) lastFoot = foot;
+  walkHandle = figure && walkMeta ? { figure, walkMeta } : null; // 行走句柄(层1地形隐藏或人物隐藏时不可走)
   worldGroup = group;
   if (selectedDragId) worldGroup.traverse(o => { if (o.userData.dragId === selectedDragId) gizmo.attach(o); });
   worldGroup.position.y = viewState.lift; // 抬高整体模型, 脱离地面网格
@@ -261,6 +264,26 @@ ctrls.figureFixed?.onChange(v => {
   rebuild();
 });
 
+// 人物行走 × PT 的关系(作者设计):
+//  ptDynamic 开 → 共存: 走动=低分辨率每帧1采样(活的噪点画面, 真反射含深层运动); 停走=恢复全分辨率累积"凝固"
+//  ptDynamic 关 → 互斥(老规则): 运动让渐进采样无法收敛 → 走动自动退 PT
+// 与"固定坐标"恒互斥(走即非钉); 停走时把最后落点写入 placed → 人留在原地不回锚点
+ctrls.figureWalk?.onChange(v => {
+  if (v) {
+    if (params.pathTrace && !params.ptDynamic) { params.pathTrace = false; ctrls.pathTrace?.updateDisplay(); ptReady = false; }
+    if (params.figureFixed) { params.figureFixed = false; ctrls.figureFixed?.updateDisplay(); figureFixedFoot = null; }
+    delete placed.figure;                                  // 行走接管位置
+  } else {
+    if (lastWalkPos) placed.figure = { ...lastWalkPos };
+    if (params.pathTrace && pathTracer) { // 定格: 恢复全分辨率与库默认节奏(500ms 渐显正好是"凝固感") → rebuild 后累积
+      pathTracer.renderScale = params.ptScale;
+      pathTracer.renderDelay = 100; pathTracer.minSamples = 5; pathTracer.fadeDuration = 500;
+      pathTracer.tiles.set(3, 3); // 恢复分块(库默认, 探针实测值; 收敛期分块可保持页面响应)
+    }
+  }
+  rebuild();
+});
+
 // ---- 视图栏 (相机预设可随时点击切换 + 模型升高) — 表现层, 不属模型参数 schema --
 const vf = gui.addFolder('视图');
 const viewBtns = { '透视图': () => setView('透视'), '轴测图': () => setView('轴测'), '正视图': () => setView('正视'), '顶视图': () => setView('顶视'), '侧视图': () => setView('侧视'), '↩ 回到 Σ·观影位': () => setView('Σ眼') };
@@ -286,6 +309,7 @@ const multiCtrl = vf.add(viewState, 'multi').name('三视口 (主视口+顶+正)
 ctrls.pathTrace?.onChange(v => {
   if (v) {
     if (params.autoPlay) { params.autoPlay = false; ctrls.autoPlay?.updateDisplay(); }
+    if (params.figureWalk && !params.ptDynamic) { params.figureWalk = false; ctrls.figureWalk?.updateDisplay(); if (lastWalkPos) placed.figure = { ...lastWalkPos }; } // 非动态模式: 开PT=定格停走
     suppressScaffold();
   }
   rebuild();
@@ -378,9 +402,28 @@ setView('Σ眼');
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
+  const dt = clock.getDelta();                 // 帧间隔(行走匀速用); elapsedTime 同步累计
   if (params.autoPlay) {
-    params.expand = Math.sin(clock.getElapsedTime() * 0.6) * 0.5 + 0.5;
+    params.expand = Math.sin(clock.elapsedTime * 0.6) * 0.5 + 0.5;
     expandCtrl.updateDisplay(); rebuild();
+  }
+  if (params.figureWalk && walkHandle) {       // 行走: 逐帧移动人物(不重建); 环线在层1安全区内, 脚贴地形
+    const { point, perimeter } = loopPoint(walkHandle.walkMeta, walkT);
+    walkT = (walkT + ((params.walkSpeed ?? 60) / U) * dt / Math.max(1e-6, perimeter)) % 1;
+    walkHandle.figure.position.set(point.x, point.y, point.z);
+    lastWalkPos = { x: point.x, y: point.y, z: point.z };
+    if (params.pathTrace && params.ptDynamic && pathTracer && ptReady && !ptQueued) {
+      // 动态PT: 拓扑没变只动了人 → setScene 内部走 GEOMETRY_ADJUSTED→bvh.refit(快路径)并重置累积
+      // → 每帧 1 次采样 = 活的噪点画面(真实反射, 含二三层运动); 低分辨率保流畅
+      // ★库默认四件套在"每帧重置"下会让画面永远出不来(作者实测灰墙, 探针逐项确认):
+      //   renderDelay=100ms(重置后等待) / minSamples=5(不足回退光栅=Σ眼灰墙) / fade=500ms /
+      //   tiles=3×3(每帧只画1/9块, samples 永远0.111<1) → 动态期间全部归零+整帧单块, 定格时恢复
+      pathTracer.renderDelay = 0; pathTracer.minSamples = 1; pathTracer.fadeDuration = 0;
+      pathTracer.tiles.set(1, 1);
+      pathTracer.renderScale = params.ptDynScale ?? 0.35;
+      gizmo.visible = false;
+      try { pathTracer.setScene(scene, getCamera()); } finally { gizmo.visible = true; }
+    }
   }
   controls.autoRotate = params.autoRotate;
   controls.update();

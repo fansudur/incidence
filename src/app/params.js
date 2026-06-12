@@ -40,6 +40,8 @@ export const PARAM_SCHEMA = [
     { key: 'terrainEnd3', label: '层3 结尾抬升 (×层高)', type: 'num', min: 0, max: 0.5, step: 0.01, def: 0, note: '末层结尾; 调三个结尾=控制整体坡度走势(噪声起伏叠加在基线之上); 太高会顶穿锥顶' },
     { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照); 脚自动贴地形' },
     { key: 'figureFixed', label: '人物固定世界坐标 (穿越)', type: 'bool', def: false, ref: 'figureFixed', note: '开启=人钉在当前位置不再跟随安全区; 拖镜距/取景框让分层扫过他 → 单见→重影→换层(结构性穿越, 档案·开放方向5)' },
+    { key: 'figureWalk', label: '人物行走 (环线)', type: 'bool', def: false, ref: 'figureWalk', note: '沿层1安全区收缩环线匀速行走, 脚贴地形。与PT互斥(运动无法累积采样): 走动用光栅/真实反射看, 定格高保真→停走开PT。停走时人留在原地' },
+    { key: 'walkSpeed', label: '行走速度', type: 'num', min: 10, max: 200, step: 5, def: 60, note: '原始单位/秒' },
   ] },
   { folder: '多世界 (一生二三)', items: [
     { key: 'worldCount', label: '世界数 N', type: 'int', min: 1, max: 6, step: 1, def: 1, gh: '8/11', note: 'N=2→C₂; N=3→C₃' },
@@ -73,6 +75,8 @@ export const PARAM_SCHEMA = [
     { key: 'ptScale', label: '渲染分辨率 (低=糊但快)', type: 'num', min: 0.25, max: 1, step: 0.05, def: 1, ref: 'ptScale', note: '★模糊主因: 0.5=半分辨率上采样→糊; 1=全分辨率最清晰(更吃 GPU)' },
     { key: 'ptBounces', label: '光线反弹次数', type: 'int', min: 1, max: 16, step: 1, def: 8, ref: 'ptBounces', note: '嵌套镜子要看到深层反射需更多反弹; 越高越准也越慢' },
     { key: 'ptSamples', label: '采样上限 (越高越干净)', type: 'int', min: 16, max: 512, step: 16, def: 128, ref: 'ptSamples', note: '累积到此样本数停止; 越高噪点越少, 收敛更久' },
+    { key: 'ptDynamic', label: '动态PT (走动实时·停走凝固)', type: 'bool', def: true, note: '行走+PT 同开时生效: 低分辨率每帧1采样=活的噪点画面(真实反射含二三层运动); 停走→全分辨率累积"凝固"成形。拓扑不变走 BVH refit 快路径' },
+    { key: 'ptDynScale', label: '动态PT分辨率', type: 'num', min: 0.2, max: 0.6, step: 0.05, def: 0.35, note: '走动期间的渲染分辨率(低=流畅); 定格后自动恢复「渲染分辨率」设置' },
   ] },
 ];
 
