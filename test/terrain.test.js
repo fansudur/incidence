@@ -4,7 +4,7 @@
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
 import { safeRegions } from '../src/core/activity.js';
-import { terrainOnPlane, pointAt, liftField, liftAt, regionDepthInfo, warpS } from '../src/core/terrain.js';
+import { terrainOnPlane, pointAt, liftField, liftAt, regionDepthInfo, warpS, mergeBands } from '../src/core/terrain.js';
 import { v, sub, dot, cross, normalize, dist, lerp } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
@@ -25,10 +25,11 @@ function setup(p = base, opts = {}) {
   const regs = safeRegions(mc, S0pt).filter((q) => q.gap + 2 < bm.length && q.gap + 1 < mc.length);
   const basePtsOf = (g) => [mc[g][2], mc[g][3], mc[g + 1][3]];
   const infos = regs.map((q) => regionDepthInfo(q.points, basePtsOf(q.gap), frameOf(q.gap)));
-  const bands = [];
+  const rawBands = [];
   for (let i = 0; i < regs.length - 1; i++)
     if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
-      bands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
+      rawBands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
+  const bands = mergeBands(rawBands); // 与 worldView 同: 重叠带必须合并
   const fpBase = {
     hSlope: p.frameH / p.fDist, wSlope: (p.frameW / 2) / p.fDist,
     rampA: warpS(S[1], bands), rampB: warpS(S[2], bands),
@@ -43,6 +44,18 @@ const ptAt = (fp, s, th) => ({
   x: fp.P0.x + fp.dir.x * (s - fp.S0) + fp.side.x * (th * fp.wSlope * s),
   y: fp.P0.y,
   z: fp.P0.z + fp.dir.z * (s - fp.S0) + fp.side.z * (th * fp.wSlope * s),
+});
+
+test('mergeBands: 重叠/相接带合并; 合并后 warpS 恢复单调 (重叠会让 σ 斜率-1 回折 — 实测可达组合的回归)', () => {
+  const m = mergeBands([[6.679, 11.51], [10.39, 19.538]]);       // 默认 mDist 配 mAngle=[45,30,30] 的实测重叠带
+  assert(m.length === 1 && Math.abs(m[0][0] - 6.679) < 1e-12 && Math.abs(m[0][1] - 19.538) < 1e-12, '重叠应并成一条大带');
+  let prev = -Infinity;
+  for (let s = 0; s <= 25; s += 0.1) { const sig = warpS(s, m); assert(sig >= prev - 1e-12, `σ 应单调 (s=${s.toFixed(1)})`); prev = sig; }
+  // 真实参数路径: 非45°角下 setup 产出的带应已合并且 σ 全程单调
+  const { bands } = setup({ ...base, mAngle: [45, 30, 30] });
+  for (let i = 1; i < bands.length; i++) assert(bands[i][0] > bands[i - 1][1], '产出带之间不应重叠');
+  prev = -Infinity;
+  for (let s = 0; s <= 30; s += 0.1) { const sig = warpS(s, bands); assert(sig >= prev - 1e-12, '真实带下 σ 应单调'); prev = sig; }
 });
 
 test('warpS: 单调连续, 冻结带内严格平坦', () => {

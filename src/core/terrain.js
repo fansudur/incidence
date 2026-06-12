@@ -35,6 +35,21 @@ export function fbm(u, w, seed, oct = 4) {
   return acc;
 }
 
+// 冻结带合并: 相邻缝的带可能重叠(近镜距/非45°角等参数组合实测 10% 可达组合中招),
+// 重叠不合并会让 warpS 在重叠区斜率 -1 → σ 非单调 → 地貌回折、R1 接缝相等失效。
+// 排序后把重叠/相接区间并成大带(同时冻结两道缝, R1 语义不变)。
+export function mergeBands(bands) {
+  if (!bands || bands.length < 2) return bands || [];
+  const s = [...bands].sort((p, q) => p[0] - q[0]);
+  const out = [s[0].slice()];
+  for (let i = 1; i < s.length; i++) {
+    const last = out[out.length - 1];
+    if (s[i][0] <= last[1]) last[1] = Math.max(last[1], s[i][1]);
+    else out.push(s[i].slice());
+  }
+  return out;
+}
+
 // ── 接缝冻结带: σ(s) — 带内冻结, 带外平移, 连续单调 ─────────────────────────
 export function warpS(s, bands) {
   if (!bands || !bands.length) return s;

@@ -41,7 +41,7 @@ export const PARAM_SCHEMA = [
   ] },
   { folder: '动画', items: [
     { key: 'expand', label: '展开 t', type: 'num', min: 0, max: 1, step: 0.001, def: 1, gh: 7, ref: 'expand' },
-    { key: 'autoPlay', label: '自动展开循环', type: 'bool', def: false },
+    { key: 'autoPlay', label: '自动展开循环', type: 'bool', def: false, ref: 'autoPlay', note: '与路径追踪互斥(每帧重建几何, PT 跟着每帧全量重建会冻死)' },
     { key: 'autoRotate', label: '缓慢自转', type: 'bool', def: false },
   ] },
   { folder: '显示', items: [

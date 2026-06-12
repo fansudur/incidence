@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection } from '../core/activity.js';
-import { terrainOnPlane, liftAt, regionDepthInfo, warpS } from '../core/terrain.js';
+import { terrainOnPlane, liftAt, regionDepthInfo, warpS, mergeBands } from '../core/terrain.js';
 import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
@@ -101,10 +101,11 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     const basePtsOf = (g) => [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
     // 第一遍: 各层深度信息 → 接缝冻结带 [g 层尾边最浅, g+1 层头边最深] (R1 对齐衔接, 所有缝默认)
     const infos = regs.map((r) => regionDepthInfo(r.points, basePtsOf(r.gap), frameOf(r.gap)));
-    const bands = [];
+    const rawBands = [];
     for (let i = 0; i < regs.length - 1; i++)
       if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
-        bands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
+        rawBands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
+    const bands = mergeBands(rawBands);                          // ★必须合并: 重叠带会让 σ 非单调、R1 失效
     const fpBase = {
       hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist, // 锥高·半宽 随深度的斜率
       rampA: warpS(S[1], bands), rampB: warpS(S[2], bands),      // 包络锚点换到 σ 域
@@ -184,9 +185,10 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
   }
 
   // 镜面角点编号 (镜面号.角号): 0=上右 1=上左 2=下左 3=下右
+  // ★上界用 mirrorsV.length 而非 nLayers: 穿帮时 mirrors 比层数短, 用 nLayers 会越界 → rebuild 崩溃且穿帮警告永不显示
   if (params.showLabels) {
     const css = ['#ff8a8a', '#8affa0', '#8ac4ff'];
-    for (let i = 0; i < nLayers; i++)
+    for (let i = 0; i < mirrorsV.length; i++)
       for (let j = 0; j < 4; j++)
         root.add(makeLabel(`${i + 1}.${j}`, mc[i][j], css[i % 3], refSize * 0.07));
   }
