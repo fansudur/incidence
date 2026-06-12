@@ -18,6 +18,7 @@ function setup(p = base, opts = {}) {
   const { regs, bands, fpOf } = terrainSetup(r.beam, safeRegions(mc, S0pt), basePtsOf, {
     hSlope: p.frameH / p.fDist, wSlope: (p.frameW / 2) / p.fDist,
     seed: opts.seed ?? 7, waves: opts.waves ?? 3, ampRatio: opts.ampRatio ?? 0.15, headFrac: opts.headFrac ?? 0.25,
+    layerEnds: opts.layerEnds,
   });
   return { mc, regs, bands, basePtsOf, fpOf };
 }
@@ -116,6 +117,48 @@ test('M₁ 近端趋平(深度包络)仍成立; 表面/裙边/越界约束不回
     else { skirt++; assert(Math.abs(lift) < 1e-4, `裙边底应贴基面, 偏差 ${lift}`); }
   }
   assert(surf > 0 && skirt > 0, '应同时有表面与裙边');
+});
+
+test('坡度基线(链式): 首层起点0→爬到结尾值, 缝两侧含基线仍严格相等', () => {
+  const ends = [0.2, 0.35, 0.1];
+  const { mc, regs, bands, fpOf } = setup(base, { ampRatio: 0, layerEnds: ends }); // 关噪声 → 看纯基线
+  const f0 = fpOf(0, false), f1 = fpOf(regs[1].gap, false);
+  // ① 首层头部≈0(起点是一条线)
+  const headPt = lerp(mc[0][2], mc[0][3], 0.5);
+  assert(Math.abs(liftField(f0, headPt).lift) < 1e-6, '首层起点基线应≈0');
+  // ② 缝两侧(冻结带内同角向)含基线严格相等 — R1 在坡度控制下保持
+  const [a, b] = bands[0];
+  const mk = (fp, s, th) => ({ x: fp.P0.x + fp.dir.x * (s - fp.S0) + fp.side.x * (th * fp.wSlope * s), y: fp.P0.y, z: fp.P0.z + fp.dir.z * (s - fp.S0) + fp.side.z * (th * fp.wSlope * s) });
+  for (const th of [-0.4, 0.5]) {
+    const LA = liftField(f0, mk(f0, a + (b - a) * 0.1, th)).lift;
+    const LB = liftField(f1, mk(f1, a + (b - a) * 0.9, th)).lift;
+    assert(Math.abs(LA - LB) < 1e-9, `坡度基线下缝两侧应严格相等 (${LA} vs ${LB})`);
+    assert(LA > 0.01, '缝处基线应为层1结尾抬升值(>0)');
+  }
+  // ③ layerEnds 缺省 → 无基线(默认外观不变)
+  const plain = setup(base, { ampRatio: 0 });
+  const pf = plain.fpOf(0, false);
+  assert(Math.abs(liftField(pf, lerp(mc[1][2], mc[1][3], 0.5)).lift) < 1e-12, '默认应无基线');
+});
+
+test('幅度正交性: 调「起伏幅度」只改围绕基线的摆幅, 不抬整体 (作者报告的均值漂移回归)', () => {
+  const ends = [0.2, 0.3, 0.1];
+  const sB = setup(base, { ampRatio: 0, layerEnds: ends });
+  const s1 = setup(base, { ampRatio: 0.15, layerEnds: ends });
+  const s2 = setup(base, { ampRatio: 0.30, layerEnds: ends });
+  const [a, b] = sB.bands[0];
+  const mk = (fp, s, th) => ({ x: fp.P0.x + fp.dir.x * (s - fp.S0) + fp.side.x * (th * fp.wSlope * s), y: fp.P0.y, z: fp.P0.z + fp.dir.z * (s - fp.S0) + fp.side.z * (th * fp.wSlope * s) });
+  let checked = 0;
+  for (const th of [-0.6, -0.3, 0, 0.3, 0.6]) {
+    const p = (st) => mk(st.fpOf(0, false), a + (b - a) * 0.3, th);
+    const B = liftField(sB.fpOf(0, false), p(sB)).lift;
+    const L1 = liftField(s1.fpOf(0, false), p(s1)).lift;
+    const L2 = liftField(s2.fpOf(0, false), p(s2)).lift;
+    if (L1 <= 1e-9 || L2 <= 1e-9 || Math.abs(L1 - B) < 1e-3) continue; // 跳过被贴底钳制/噪声恰为均值的点
+    assert(Math.abs((L2 - B) - 2 * (L1 - B)) < 1e-9, `幅度翻倍应只让偏离基线量翻倍 (B=${B.toFixed(4)} L1=${L1.toFixed(4)} L2=${L2.toFixed(4)})`);
+    checked++;
+  }
+  assert(checked >= 2, `应至少验证2个有效采样点(实际 ${checked})`);
 });
 
 test('ampRatio=0 → 全贴基面; pointAt 与 liftAt 一致', () => {

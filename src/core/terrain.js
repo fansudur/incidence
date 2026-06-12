@@ -69,8 +69,32 @@ export function terrainSetup(beam, regions, basePtsOf, opts) {
     if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
       raw.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
   const bands = mergeBands(raw);                                  // ★必须合并: 重叠带 σ 非单调 → R1 失效
-  const fpBase = { ...opts, rampA: warpS(S[1], bands), rampB: warpS(S[2], bands), bands };
+  // 基线(作者的坡度控制): 每层只有「结尾高度」是自由变量(链式规则: 下一层起点=上一层结尾)。
+  // 锚点定义在 σ 域 → 冻结带内 σ 恒定 → 基线在缝两侧自动严格相等(R1 原样保留)。
+  // layerEnds[i] = 第 i 层结尾抬升(×层高, 换算成绝对值=×hSlope×σ); 首层起点恒为 0(贴地, 一条线)。
+  const baseAnchors = [];
+  if (infos[0]) baseAnchors.push([warpS(infos[0].sMin, bands), 0]);
+  for (let i = 0; i < regs.length; i++) {
+    if (!infos[i]) continue;
+    const sEnd = i < regs.length - 1 ? infos[i].tailMinS : infos[i].sMax;
+    const sig = warpS(sEnd, bands);
+    const rel = (opts.layerEnds && opts.layerEnds[i]) || 0;
+    baseAnchors.push([sig, rel * opts.hSlope * sig]);
+  }
+  const fpBase = { ...opts, rampA: warpS(S[1], bands), rampB: warpS(S[2], bands), bands, baseAnchors };
   return { regs, bands, fpOf: (g, flush = g === 0) => ({ ...fpBase, ...frameOf(g), flushFront: flush }) };
+}
+
+// 分段线性基线插值 (σ 域; 锚点单调)
+function baseAt(anchors, sig) {
+  if (!anchors || !anchors.length) return 0;
+  if (sig <= anchors[0][0]) return anchors[0][1];
+  for (let i = 1; i < anchors.length; i++)
+    if (sig <= anchors[i][0]) {
+      const [a, va] = anchors[i - 1], [b, vb] = anchors[i];
+      return va + (vb - va) * ((sig - a) / Math.max(1e-9, b - a));
+    }
+  return anchors[anchors.length - 1][1];
 }
 
 // ── 接缝冻结带: σ(s) — 带内冻结, 带外平移, 连续单调 ─────────────────────────
@@ -96,7 +120,10 @@ export function liftField(fp, p) {
   const u = fp.waves * Math.log2(Math.max(sig, 1e-6)); // 自相似: 山随深度等比放大
   const t = fbm(u, fp.waves * w, fp.seed);
   const ramp = smooth(clamp01((sig - fp.rampA) / Math.max(1e-9, fp.rampB - fp.rampA))); // M₁→M₂ 渐起
-  return { lift: fp.ampRatio * fp.hSlope * sig * ramp * t, t };
+  // 职责正交(作者发现的冲突修复): 基线(结尾滑块)=地势中线; 噪声零均值(t-0.5)只管围绕中线的摆幅
+  // —— 否则噪声均值≈0.5, 调「起伏幅度」会把整体地形抬高。谷底低于锥底则贴底(平地滩), 不挖穿安全区底。
+  const noise = fp.ampRatio * fp.hSlope * sig * ramp * (t - 0.5);
+  return { lift: Math.max(0, baseAt(fp.baseAnchors, sig) + noise), t };
 }
 
 // ── 基面公共构造 (hull/标架/2D凸包) ────────────────────────────────────────

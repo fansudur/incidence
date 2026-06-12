@@ -118,6 +118,7 @@ export function buildTerrain(grid, opacity = 1, lowHex = 0x5f5a4e, highHex = 0xd
 // height = 身高(场景单位)。先验证站位/受光/反射, 之后再换精模或加走动。
 export function buildFigure(foot, up, height, colorHex) {
   const g = new THREE.Group();
+  g.userData.dragId = 'figure';                      // 拖拽编辑的根标识
   const r = height * 0.12, bodyLen = height * 0.56; // 胶囊半径 / 直段长
   const mat = new THREE.MeshStandardMaterial({ color: colorHex ?? 0xcfc7ba, roughness: 0.75, metalness: 0.0 });
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(r, bodyLen, 6, 14), mat);
@@ -163,11 +164,13 @@ export function buildScenery(anchors, refSize) {
   for (const a of anchors) {
     const i = a.layer % 3;
     const r = a.size || refSize * 0.05; // 每层按其九宫格格子大小, 防溢出挡到邻层
-    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0),
-      new THREE.MeshStandardMaterial({ color: col[i], metalness: 0.2, roughness: 0.5, emissive: col[i], emissiveIntensity: 0.25, flatShading: true }));
-    m.position.set(a.center.x, a.center.y, a.center.z);
-    g.add(m);
-    g.add(makeLabel(String(a.layer + 1), new THREE.Vector3(a.center.x, a.center.y + r * 1.7, a.center.z), css[i], refSize * 0.08));
+    const sub = new THREE.Group();                  // 每块布景一个子组(几何在原点) → 拖拽时块+编号一起走
+    sub.position.set(a.center.x, a.center.y, a.center.z);
+    sub.userData.dragId = 'scenery-' + a.layer;     // 拖拽编辑的根标识
+    sub.add(new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0),
+      new THREE.MeshStandardMaterial({ color: col[i], metalness: 0.2, roughness: 0.5, emissive: col[i], emissiveIntensity: 0.25, flatShading: true })));
+    sub.add(makeLabel(String(a.layer + 1), new THREE.Vector3(0, r * 1.7, 0), css[i], refSize * 0.08));
+    g.add(sub);
   }
   return g;
 }

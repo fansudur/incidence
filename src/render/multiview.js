@@ -5,7 +5,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-export function createMultiview({ renderer, scene, persp, controls, viewState, getWorldGroup, onExited }) {
+// getMainCamera: 主视口显示"当前视图"的相机(可以是 Σ眼/透视/正交) — 这样在 Σ 观影位也能开三视口,
+// 旁边两个视口同时看模型整体(作者工作流: 盯取景框成像的同时拖镜距/框距看模型变化)。
+export function createMultiview({ renderer, scene, controls, viewState, getWorldGroup, getMainCamera, onExited }) {
   const vpTop = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 5000);   // 顶视
   const vpFront = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 5000); // 正视
   const ctrlTop = new OrbitControls(vpTop, renderer.domElement); ctrlTop.enableDamping = true; ctrlTop.enabled = false;
@@ -16,7 +18,7 @@ export function createMultiview({ renderer, scene, persp, controls, viewState, g
     const W = Math.max(200, innerWidth - guiW), H = innerHeight;
     const mainW = Math.round(W * viewState.splitX), topH = Math.round(H * viewState.splitY);
     return [
-      { cam: persp, ctrl: controls, x: 0, y: 0, w: mainW, h: H, persp: true },
+      { cam: getMainCamera(), ctrl: controls, x: 0, y: 0, w: mainW, h: H, main: true }, // 主视口 = 当前视图相机
       { cam: vpTop, ctrl: ctrlTop, x: mainW, y: H - topH, w: W - mainW, h: topH, dir: [0, 1, 0.001], up: [0, 0, -1] },
       { cam: vpFront, ctrl: ctrlFront, x: mainW, y: 0, w: W - mainW, h: H - topH, dir: [0, 0, 1], up: [0, 1, 0] },
     ];
@@ -29,7 +31,7 @@ export function createMultiview({ renderer, scene, persp, controls, viewState, g
     const sph = box.getBoundingSphere(new THREE.Sphere());
     const c = sph.center, R = sph.radius || 1;
     for (const vp of viewports()) {
-      if (vp.persp) continue;
+      if (vp.main) continue;
       const cam = vp.cam, a = vp.w / vp.h, m = R * 1.15;
       cam.left = -m * a; cam.right = m * a; cam.top = m; cam.bottom = -m; cam.near = 0.01; cam.far = R * 40;
       cam.up.set(...vp.up);
@@ -56,7 +58,7 @@ export function createMultiview({ renderer, scene, persp, controls, viewState, g
   let dragDiv = null;
   function routeControls(px, py) { // 按指针位置启停三套控制器 (pointerdown / wheel 共用)
     const vp = vpAtPointer(px, py);
-    controls.enabled = !!(vp && vp.persp);
+    controls.enabled = !!(vp && vp.main);
     ctrlTop.enabled = !!(vp && vp.cam === vpTop);
     ctrlFront.enabled = !!(vp && vp.cam === vpFront);
   }
@@ -89,7 +91,14 @@ export function createMultiview({ renderer, scene, persp, controls, viewState, g
     routeControls(e.clientX, e.clientY);
   }, true);
 
-  function render() { // 同场景渲染 3 次, 各塞进自己的矩形(scissor 裁剪) + 视口间隙边框
+  function fitCam(cam, w, h) { // 任意相机适配矩形宽高比(正交保留用户缩放 top/bottom)
+    const a = w / h;
+    if (cam.isPerspectiveCamera) { if (Math.abs(cam.aspect - a) > 1e-6) { cam.aspect = a; cam.updateProjectionMatrix(); } }
+    else { cam.left = -cam.top * a; cam.right = cam.top * a; cam.updateProjectionMatrix(); }
+  }
+  // tryPTInMain(x,y,w,h) 可选: 返回 true 表示主视口这帧由路径追踪绘制(钩子自管相机比例与采样),
+  // 否则主视口走光栅。两个副视口永远光栅实时 — 这就是"Σ位盯成像 + 旁边看模型"的工作流。
+  function render(tryPTInMain) {
     ctrlTop.update(); ctrlFront.update();
     const g = 2; // 视口间隙(像素)
     renderer.setScissorTest(false);
@@ -98,29 +107,30 @@ export function createMultiview({ renderer, scene, persp, controls, viewState, g
     renderer.setScissorTest(true);
     for (const vp of viewports()) {
       const w = vp.w - 2 * g, h = vp.h - 2 * g;
-      if (vp.persp) { persp.aspect = w / h; persp.updateProjectionMatrix(); }
       renderer.setViewport(vp.x + g, vp.y + g, w, h);
       renderer.setScissor(vp.x + g, vp.y + g, w, h);
+      if (vp.main && tryPTInMain && tryPTInMain(vp.x + g, vp.y + g, w, h)) continue; // PT 已画主视口
+      if (vp.main) fitCam(vp.cam, w, h);
       renderer.render(scene, vp.cam);
     }
     renderer.setScissorTest(false);
     renderer.setClearColor(0x000000, 1);
     renderer.setViewport(0, 0, innerWidth, innerHeight);
   }
-  function exit() { // 退三视口 → 恢复单视口渲染状态(含透视相机全屏宽高比)
+  function exit() { // 退三视口 → 恢复单视口渲染状态(当前主相机回全屏宽高比)
     viewState.multi = false;
     controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false;
     renderer.domElement.style.cursor = '';
-    persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
+    fitCam(getMainCamera(), innerWidth, innerHeight);
     renderer.setViewport(0, 0, innerWidth, innerHeight);
     onExited?.();
   }
   function onResize() { // 两台正交相机只校宽高比(保留用户平移/缩放, 不整体重取景)
     for (const vp of viewports()) {
-      if (vp.persp) continue;
+      if (vp.main) continue;
       const a = vp.w / vp.h;
       vp.cam.left = -vp.cam.top * a; vp.cam.right = vp.cam.top * a; vp.cam.updateProjectionMatrix();
     }
   }
-  return { frameViewports, render, exit, onResize };
+  return { frameViewports, render, exit, onResize, vpAt: vpAtPointer, dividerAt: dividerAtPointer };
 }

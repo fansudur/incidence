@@ -70,8 +70,15 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     }
   }
 
-  // 测试布景: 每层活动区中央放红/绿/蓝标记 (Σ 反射看到什么的地基; 真实反射接入后会被折叠合成)
-  if (params.showScenery && !bug && mc.length >= 2) root.add(buildScenery(sceneryAnchors(mcPlain, data.seed), refSize));
+  // 测试布景: 每层活动区中央放红/绿/蓝标记; 拖拽编辑过的块用 runtime.placed 存档位置(重建后仍生效)
+  if (params.showScenery && !bug && mc.length >= 2) {
+    const sc = buildScenery(sceneryAnchors(mcPlain, data.seed), refSize);
+    for (const ch of sc.children) {
+      const p = runtime.placed?.[ch.userData.dragId];
+      if (p) ch.position.set(p.x, p.y, p.z);
+    }
+    root.add(sc);
+  }
 
   // 水平地面 (真实世界地): 每段光锥 ∩ 平面 y=groundY → 水平多边形, 镜面处无缝拼接 (水平面=镜系统不变量)
   const gY = (params.groundY ?? -30) / U;
@@ -94,12 +101,24 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
       hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist,
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
       headFrac: params.terrainHead ?? 0.25,
+      layerEnds: [params.terrainEnd1 ?? 0, params.terrainEnd2 ?? 0, params.terrainEnd3 ?? 0], // 坡度基线: 各层结尾抬升(链式)
     });
     // 范围=黄色安全区(红区腾空); R2 贴地仅第一层(fpOf 默认 gap0 才 flushFront); terrainL1/2/3 只控显示
+    const TINT = [0xff6a6a, 0x6aff8a, 0x6ab4ff];                 // 按层着色(红绿蓝): 检查工具, 一眼分清哪块地形属于哪层
+    const mixHex = (a, b, t) => {
+      const f = (sh) => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * t);
+      return (f(16) << 16) | (f(8) << 8) | f(0);
+    };
     for (const r of regs) {
       if (params['terrainL' + (r.gap + 1)] === false) continue;
       const grid = terrainOnPlane(r.points, basePtsOf(r.gap), fpOf(r.gap));
-      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid, params.terrainOpacity ?? 1)); }
+      if (!grid) continue;
+      terrains.push({ gap: r.gap, grid });
+      const op = params.terrainOpacity ?? 1;
+      if (params.terrainTint) {
+        const c = TINT[r.gap % 3];
+        root.add(buildTerrain(grid, op, mixHex(0x5f5a4e, c, 0.55), mixHex(0xd9d3c5, c, 0.55)));
+      } else root.add(buildTerrain(grid, op));
     }
   }
 
@@ -109,7 +128,10 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
   //    → Σ 看到 单见(层1)→重影(红区, 两个他)→换层(层2, 尺寸/深度/手性变) = 人不动的空间穿越。
   let figFoot = null;
   if (params.showFigures && !bug && mcPlain.length >= 2) {
-    if (runtime.fixedFoot) {
+    if (runtime.placed?.figure) {                 // 手动拖放过 → 存档位置优先(含对穿越钉点的覆盖)
+      const p = runtime.placed.figure;
+      figFoot = new THREE.Vector3(p.x, p.y, p.z);
+    } else if (runtime.fixedFoot) {
       figFoot = new THREE.Vector3(runtime.fixedFoot.x, runtime.fixedFoot.y, runtime.fixedFoot.z);
     } else {
       const sr = safeRegions(mcPlain, data.seed);
