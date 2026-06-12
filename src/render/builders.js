@@ -125,7 +125,7 @@ export function buildGround(poly, colorHex) {
 
 // 地形 (CORE terrainOnPlane 产物 → mesh): 顶点色按相对高度插值(谷暗坡亮), 裙边剖面=深土色;
 // 无图片贴图 → 无失真且 PT/光栅一致
-export function buildTerrain(grid, lowHex = 0x5f5a4e, highHex = 0xd9d3c5, cutHex = 0x4f4a42) { // 剖面色与地表同族略深: 近黑会让远层(掠射视角下正对的是剖面墙)整体读成黑块
+export function buildTerrain(grid, opacity = 1, lowHex = 0x5f5a4e, highHex = 0xd9d3c5, cutHex = 0x4f4a42) { // 剖面色与地表同族略深: 近黑会让远层(掠射视角下正对的是剖面墙)整体读成黑块
   const { positions, indices, rel } = grid;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -143,6 +143,7 @@ export function buildTerrain(grid, lowHex = 0x5f5a4e, highHex = 0xd9d3c5, cutHex
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 4));
   return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
     vertexColors: true, metalness: 0.0, roughness: 0.93, side: THREE.DoubleSide,
+    transparent: opacity < 1, opacity, depthWrite: opacity >= 1, // 半透明 → 透视检查层间衔接(作者用途)
   }));
 }
 

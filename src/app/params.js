@@ -24,12 +24,17 @@ export const PARAM_SCHEMA = [
   { folder: '地面·地形·人物', items: [
     { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: false, note: '默认隐藏(作者: 平坦灰地反而压缩空间感, 用地形起伏拉深浅); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
     { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 取景框下边=-frameH/2; 地形基面同用此高度' },
-    { key: 'showTerrain', label: '地形 (起伏·按层)', type: 'bool', def: true, note: '范围=黄色安全区(作者选定, 红区腾空防重影/跨层遮挡); 基面=层底斜面; 切割边缘+垂直裙边(剖切模型); 跨缝轮廓出自同一连续场' },
+    { key: 'showTerrain', label: '地形 (起伏·按层)', type: 'bool', def: true, note: '总开关。范围=黄色安全区; 基面=层底斜面; 跨缝轮廓出自同一连续场' },
+    { key: 'terrainL1', label: '地形·层1', type: 'bool', def: true, note: '单层隐藏 → 检查层间衔接/第二层起始高度在取景框里的位置' },
+    { key: 'terrainL2', label: '地形·层2', type: 'bool', def: true },
+    { key: 'terrainL3', label: '地形·层3', type: 'bool', def: true },
+    { key: 'terrainOpacity', label: '地形不透明度', type: 'num', min: 0.15, max: 1, step: 0.05, def: 1, note: '半透明 → 透视检查各层地面高度是否吻合衔接' },
     { key: 'terrainAmp', label: '起伏幅度 (×层高)', type: 'num', min: 0, max: 0.5, step: 0.01, def: 0.15, note: '幅度=层高×系数, 深层自动更大(W₁<W₂<W₃); 太高会挡住后层(作者预言过的遮挡)' },
     { key: 'terrainWaves', label: '起伏尺度 (波数)', type: 'num', min: 1, max: 8, step: 0.5, def: 3, note: '一层里大约几座山; 小=缓丘, 大=碎丘' },
     { key: 'terrainSeed', label: '地形种子', type: 'int', min: 1, max: 999, step: 1, def: 7, note: '换一个数=换一套地貌; 同种子永远长同样的山' },
     { key: 'terrainHead', label: '首层前缘贴地 (×层深)', type: 'num', min: 0, max: 0.6, step: 0.05, def: 0.25, note: '仅第一层面对M₁的前边贴地(它前面无可衔接物); 其余层正常起伏, 接缝靠对齐衔接隐藏(近脊遮远口)' },
     { key: 'figureH', label: '人物身高', type: 'num', min: 10, max: 300, step: 1, def: 80, note: '原始单位 (取景框高默认40作参照); 脚自动贴地形' },
+    { key: 'figureFixed', label: '人物固定世界坐标 (穿越)', type: 'bool', def: false, ref: 'figureFixed', note: '开启=人钉在当前位置不再跟随安全区; 拖镜距/取景框让分层扫过他 → 单见→重影→换层(结构性穿越, 档案·开放方向5)' },
   ] },
   { folder: '多世界 (一生二三)', items: [
     { key: 'worldCount', label: '世界数 N', type: 'int', min: 1, max: 6, step: 1, def: 1, gh: '8/11', note: 'N=2→C₂; N=3→C₃' },

@@ -88,12 +88,14 @@ controls.addEventListener('change', () => { if (params.pathTrace && pathTracer) 
 // ---- 重建 + 取景 + 警告 ------------------------------------------------------
 const warnEl = document.querySelector('#warn');
 let worldGroup = null, framed = false;
+let figureFixedFoot = null, lastFoot = null; // 结构性穿越: 固定模式钉住的脚点 / 最近一次计算的脚点(开启瞬间捕获)
 function rebuild() {
   if (worldGroup) {
     scene.remove(worldGroup);
     worldGroup.traverse(o => { o.geometry?.dispose?.(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
   }
-  const { group, bugLayer } = buildAllWorlds(params); // 视锥追迹建世界 → src/render/worldView.js
+  const { group, bugLayer, foot } = buildAllWorlds(params, { fixedFoot: figureFixedFoot }); // 视锥追迹建世界 → src/render/worldView.js
+  if (foot) lastFoot = foot;
   worldGroup = group;
   worldGroup.position.y = viewState.lift; // 抬高整体模型, 脱离地面网格
   scene.add(worldGroup);
@@ -107,8 +109,11 @@ function rebuild() {
   if (params.pathTrace) preparePT(); else ptReady = false; // 几何变了 → 重建路径追踪 BVH
 }
 // 视图预设: 透视(perspective) / 轴测·正视·顶视·侧视(正交 orthographic)。按模型包围盒取景。
+// 关系规则: 视图预设=单视口状态 → 在三视口下点任何预设(含Σ眼)先自动退出三视口, 否则 renderMulti
+// 用自己的三台相机渲染、根本不看 setView 切换的相机 → 表现为"按钮失效"。
 function setView(name) {
   if (!worldGroup) return;
+  if (viewState.multi) exitMulti(); // 单视口预设与三视口互斥(exitMulti 为函数声明, 提升可用)
   if (name === 'Σ眼') { // 观者所见: eyeCam 在 Σ、透过取景框 F 朝 M₁ (fov 由 F 张角定); U=100
     currentView = name;
     if (suppressScaffold()) rebuild(); // 观影位也关黄红脚手架(rebuild 移除其 mesh; framed 已 true 不会再切视图)
@@ -288,6 +293,13 @@ function applyEnv() {
 }
 for (const k of ['sunAz', 'sunEl', 'sunIntensity', 'skyTop', 'skyHorizon']) ctrls[k]?.onChange(applyEnv);
 
+// 结构性穿越(作者想法, 见《项目档案》开放方向5): 开启=把人钉在当前位置(世界坐标), 关闭=恢复跟随安全区。
+// 钉住后拖 镜距/取景框 让分层扫过他 → Σ 看到 单见→重影(红区)→换层, 人全程未动。
+ctrls.figureFixed?.onChange(v => {
+  figureFixedFoot = v && lastFoot ? lastFoot.clone() : null;
+  rebuild();
+});
+
 // ---- 视图栏 (相机预设可随时点击切换 + 模型升高) — 表现层, 不属模型参数 schema --
 const vf = gui.addFolder('视图');
 const viewBtns = { '透视图': () => setView('透视'), '轴测图': () => setView('轴测'), '正视图': () => setView('正视'), '顶视图': () => setView('顶视'), '侧视图': () => setView('侧视'), '↩ 回到 Σ·观影位': () => setView('Σ眼') };
@@ -299,9 +311,35 @@ vf.add(viewState, 'eyeFovScale', 1, 1.8, 0.05).name('Σ眼视野放宽 ×').onCh
   eyeCam.updateProjectionMatrix();
   if (params.pathTrace && pathTracer) pathTracer.updateCamera();
 });
-vf.add(viewState, 'multi').name('三视口 (透视+顶+正)').onChange(v => {
-  if (v) { useCamera(persp); controls.enabled = true; frameViewports(); }
-  else { controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false; renderer.domElement.style.cursor = ''; persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix(); renderer.setViewport(0, 0, innerWidth, innerHeight); }
+// ── 三视口 ↔ 路径追踪 互斥 ──────────────────────────────────────────────────
+// 原因: 主循环里 PT 分支独占整个画布(单相机渐进收敛), 三视口分支永远轮不到 → 表现为"按钮没反应/只有
+// 一个画面"; 且三视口会把 persp.aspect 改成子视口比例, PT 拿它全屏画 → 拉伸变形。给三个调试视口各跑
+// 一个追踪器无意义 → 显式互斥: 开一个自动退另一个(状态同步), 并在回单视口时恢复全屏宽高比。
+function exitMulti() { // 退三视口 → 恢复单视口渲染状态
+  viewState.multi = false;
+  multiCtrl.updateDisplay();
+  controls.enabled = true; ctrlTop.enabled = false; ctrlFront.enabled = false;
+  renderer.domElement.style.cursor = '';
+  persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+}
+const multiCtrl = vf.add(viewState, 'multi').name('三视口 (透视+顶+正·与PT互斥)').onChange(v => {
+  if (v) {
+    if (params.pathTrace) { params.pathTrace = false; ctrls.pathTrace?.updateDisplay(); ptReady = false; rebuild(); } // 互斥: 进三视口先退 PT
+    useCamera(persp); persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
+    currentView = '透视'; updateSeedVisibility();              // 从Σ眼进入时归位: 否则Σ球/标注在三视口里仍被隐藏
+    controls.enabled = true; frameViewports();
+  } else exitMulti();
+});
+// 重定义 PT 开关(覆盖上方的简单版): 开 PT 先退三视口 + 恢复全屏宽高比, 再走脚手架抑制与重建
+ctrls.pathTrace?.onChange(v => {
+  if (v) {
+    if (viewState.multi) exitMulti();                            // 互斥: 开 PT 先退三视口
+    const cam = getCamera();
+    if (cam.isPerspectiveCamera) { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); } // 防子视口比例残留 → 拉伸
+    suppressScaffold();
+  }
+  rebuild();
 });
 
 // 默认进入 Σ·观影位 (路径追踪在 params 里默认开) — 落地即影院视角看合成反射画面

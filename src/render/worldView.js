@@ -9,8 +9,9 @@ import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
 import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
 import { SEED_COLOR } from './materials.js';
 
-// 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug }。
-function buildSingleWorld(params, base = 0) {
+// 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug, foot }。
+// runtime.fixedFoot: 人物钉在固定世界坐标(结构性穿越演示) — 人不动, 拖参数让分层扫过他。
+function buildSingleWorld(params, base = 0, runtime = {}) {
   const root = new THREE.Group();
   const nLayers = Math.round(params.layerCount);
   const md = params.mDist.map(v => v / U);
@@ -110,33 +111,41 @@ function buildSingleWorld(params, base = 0) {
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
       headFrac: params.terrainHead ?? 0.25, bands,
     };
-    // 第二遍: 建各层地形。范围=黄色安全区(红区腾空); R2 贴地仅第一层(gap 0)面对 M₁ 的前边
+    // 第二遍: 建各层地形。范围=黄色安全区(红区腾空); R2 贴地仅第一层(gap 0)面对 M₁ 的前边。
+    // 单层开关 terrainL1/2/3(检查层间衔接) — 注意冻结带照常计算: 隐藏某层不改变其余层的地貌。
     for (const r of regs) {
+      if (params['terrainL' + (r.gap + 1)] === false) continue;
       const fp = { ...fpBase, ...frameOf(r.gap), flushFront: r.gap === 0 };
       const grid = terrainOnPlane(r.points, basePtsOf(r.gap), fp);
-      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid)); }
+      if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid, params.terrainOpacity ?? 1)); }
     }
   }
 
-  // 占位人: 站在第一层【安全区】中心(地形虽铺满整条带, 但带中心在红区会被两条镜链看成重影 — 实测出现过两个人);
-  // 脚点 = 安全区底面质心的 (x,z) → liftField 抬升(与地形同一函数, 脚必贴地)
+  // 占位人。两种锚定(作者新想法"结构性穿越"):
+  //  跟随模式(默认): 脚点=第一层安全区质心(防重影), 参数动人跟着区域走;
+  //  固定模式(runtime.fixedFoot): 人钉在世界坐标(x,y,z 全固定)不动 — 拖镜距/取景框让分层扫过他
+  //    → Σ 看到 单见(层1)→重影(红区, 两个他)→换层(层2, 尺寸/深度/手性变) = 人不动的空间穿越。
+  let figFoot = null;
   if (params.showFigures && !bug && mcPlain.length >= 2) {
-    const sr = safeRegions(mcPlain, data.seed);
-    const t0 = sr.length ? terrains.find((t) => t.gap === sr[0].gap) : null;
-    let foot = null;
-    if (t0 && sr.length) {
-      const m = t0.grid.meta;
-      const sec = planeSection(sr[0].points, m.pa, m.n);          // 安全区在该层底斜面上的截面
-      if (sec) {
-        const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
-        const bp = { x: c.x / sec.length, y: c.y / sec.length, z: c.z / sec.length };
-        foot = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);
+    if (runtime.fixedFoot) {
+      figFoot = new THREE.Vector3(runtime.fixedFoot.x, runtime.fixedFoot.y, runtime.fixedFoot.z);
+    } else {
+      const sr = safeRegions(mcPlain, data.seed);
+      const t0 = sr.length ? terrains.find((t) => t.gap === sr[0].gap) : null;
+      if (t0 && sr.length) {
+        const m = t0.grid.meta;
+        const sec = planeSection(sr[0].points, m.pa, m.n);        // 安全区在该层底斜面上的截面
+        if (sec) {
+          const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
+          const bp = { x: c.x / sec.length, y: c.y / sec.length, z: c.z / sec.length };
+          figFoot = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);
+        }
+      } else if (sr.length) {
+        const sec = groundSection(sr[0].points, gY);
+        if (sec) { const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 }); figFoot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length); }
       }
-    } else if (sr.length) {
-      const sec = groundSection(sr[0].points, gY);
-      if (sec) { const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 }); foot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length); }
     }
-    if (foot) root.add(buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
+    if (figFoot) root.add(buildFigure(figFoot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
   }
 
   // 活动空间(布尔差集的输入): 各镜面间的截头锥段 + 4 个复用点(M_g 长边 / M_{g+1} 短边)
@@ -193,19 +202,20 @@ function buildSingleWorld(params, base = 0) {
     }
   }
   if (bug) root.add(buildSphere(beam[beam.length - 1], 1, 0xff5ad0, sR * 1.4));
-  return { root, bug };
+  return { root, bug, foot: figFoot };
 }
 
-// 多世界: 绕 Y 均分旋转复制; 返回合并 group + 最深穿帮层(0=无)。
-export function buildAllWorlds(params) {
+// 多世界: 绕 Y 均分旋转复制; 返回合并 group + 最深穿帮层(0=无) + 首世界人物脚点(穿越模式捕获用)。
+export function buildAllWorlds(params, runtime = {}) {
   const all = new THREE.Group();
-  let bugLayer = 0;
+  let bugLayer = 0, foot = null;
   const N = Math.max(1, Math.round(params.worldCount));
   for (let k = 0; k < N; k++) {
-    const { root, bug } = buildSingleWorld(params, k * Math.round(params.layerCount));
-    root.rotation.y = (2 * Math.PI / N) * k;
-    all.add(root);
-    bugLayer = Math.max(bugLayer, bug);
+    const w = buildSingleWorld(params, k * Math.round(params.layerCount), runtime);
+    w.root.rotation.y = (2 * Math.PI / N) * k;
+    all.add(w.root);
+    bugLayer = Math.max(bugLayer, w.bug);
+    if (k === 0) foot = w.foot;
   }
-  return { group: all, bugLayer };
+  return { group: all, bugLayer, foot };
 }
