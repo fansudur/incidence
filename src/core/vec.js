@@ -12,8 +12,9 @@ export const normalize = (a) => { const l = len(a) || 1; return scale(a, 1 / l);
 export const lerp = (a, b, t) => add(a, scale(sub(b, a), t));
 export const dist = (a, b) => len(sub(a, b));
 
-// 绕竖直轴 Y 旋转 angle(弧度), 与 THREE.Vector3.applyAxisAngle((0,1,0), angle) 一致
-export const rotateY = (a, angle) => {
-  const c = Math.cos(angle), s = Math.sin(angle);
-  return { x: a.x * c + a.z * s, y: a.y, z: -a.x * s + a.z * c };
+// 平面 2D 标架: 给法向 n 配一对正交基 {e1, e2} (planeSection / terrain.basis 共用同一构造)
+export const planeBasis = (n) => {
+  const ref = Math.abs(n.y) < 0.9 ? v(0, 1, 0) : v(1, 0, 0);
+  const e1 = normalize(cross(n, ref));
+  return { e1, e2: cross(n, e1) };
 };

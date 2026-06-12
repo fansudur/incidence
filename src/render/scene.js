@@ -1,5 +1,5 @@
 // 场景初始化 (RENDER 层): 渲染器/场景/相机/控制器 + 天空环境(equirect 渐变) + 太阳 + resize。
-// 调一次 createScene(params) 拿到 { renderer, scene, camera, controls, sun, sky, updateEnv }; 与几何/世界无关。
+// 调一次 createScene(params) 拿到 { renderer, scene, controls, persp, ortho, eyeCam, getCamera, useCamera, updateEnv }; 与几何/世界无关。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GradientEquirectTexture } from 'three-gpu-pathtracer'; // equirect 天空 → 光栅+PT 共用, PT 不再发黑
@@ -62,5 +62,5 @@ export function createScene(params) {
 
   const useCamera = (cam) => { state.camera = cam; controls.object = cam; controls.update(); };
 
-  return { renderer, scene, controls, persp, ortho, eyeCam, getCamera: () => state.camera, useCamera, sun, sky, updateEnv };
+  return { renderer, scene, controls, persp, ortho, eyeCam, getCamera: () => state.camera, useCamera, updateEnv }; // sun/sky 由 updateEnv 闭包全权管理, 不外漏
 }

@@ -1,9 +1,9 @@
 // 活动区 (零 three 依赖): 安全可布景区(黄) + 易穿帮区(红)。输出凸包顶点(点列), 由渲染层成体。
 // mc = [...各镜面四角, 出射远端四边形] (来自 frustum.traceFrustum)。
-import { v, sub, add, scale, dot, cross, normalize, lerp, dist } from './vec.js';
+import { v, sub, add, scale, dot, cross, normalize, lerp, dist, planeBasis } from './vec.js';
 
 const planeFrom = (a, b, c) => ({ point: a, normal: normalize(cross(sub(b, a), sub(c, a))) });
-const centroid = (arr) => scale(arr.reduce((s, p) => add(s, p), v(0, 0, 0)), 1 / arr.length);
+export const centroid = (arr) => scale(arr.reduce((s, p) => add(s, p), v(0, 0, 0)), 1 / arr.length); // 点集均值(导出: RENDER 落点/编号也用)
 const sd = (pt, pl) => dot(sub(pt, pl.point), pl.normal); // 点到平面的有符号距离
 
 // 平面 ∩ 四边形: 取交线落在四边形内的线段两端点
@@ -16,8 +16,8 @@ function planeQuadSeg(plane, quad) {
   }
   return pts;
 }
-// 四边形两条竖直边, 按边长返回 {long, short}
-function vEdges(c) {
+// 四边形两条竖直边, 按边长返回 {long, short} (导出: RENDER 脚手架也用, 删掉了 builders 里的同构副本)
+export function vEdges(c) {
   const right = [c[0], c[3]], left = [c[1], c[2]];
   return dist(right[0], right[1]) >= dist(left[0], left[1]) ? { long: right, short: left } : { long: left, short: right };
 }
@@ -141,9 +141,7 @@ export function planeSection(points, p0, n) {
     if ((da < -EPS && db > EPS) || (da > EPS && db < -EPS)) pts.push(lerp(a, b, da / (da - db)));
   }
   if (pts.length < 3) return null;
-  // 平面内 2D 标架 (e1 ⊥ n, e2 = n × e1)
-  const ref = Math.abs(nn.y) < 0.9 ? v(0, 1, 0) : v(1, 0, 0);
-  const e1 = normalize(cross(nn, ref)), e2 = cross(nn, e1);
+  const { e1, e2 } = planeBasis(nn); // 平面内 2D 标架(构造统一在 vec.planeBasis)
   const uv = (p) => ({ x: dot(sub(p, p0), e1), z: dot(sub(p, p0), e2), p });
   // Andrew 单调链 2D 凸包 (标架坐标)
   const s = pts.map(uv).sort((p, q) => p.x - q.x || p.z - q.z);

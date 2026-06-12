@@ -23,7 +23,7 @@ export const PARAM_SCHEMA = [
   ] },
   { folder: '地面·地形·人物', items: [
     { key: 'showGround', label: '水平地面 (世界地)', type: 'bool', def: false, note: '默认隐藏(作者: 平坦灰地反而压缩空间感, 用地形起伏拉深浅); 水平面是45°镜系统不变量→各段无缝拼接、错链自遮盖' },
-    { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 取景框下边=-frameH/2; 地形基面同用此高度' },
+    { key: 'groundY', label: '地面高度 (相对Σ·负=下)', type: 'num', min: -150, max: -5, step: 1, def: -30, note: '原始单位; 仅水平地面与"无地形时人物落点兜底"用; 地形基面=层底斜面, 与此无关' },
     { key: 'showTerrain', label: '地形 (起伏·按层)', type: 'bool', def: true, note: '总开关。范围=黄色安全区; 基面=层底斜面; 跨缝轮廓出自同一连续场' },
     { key: 'terrainL1', label: '地形·层1', type: 'bool', def: true, note: '单层隐藏 → 检查层间衔接/第二层起始高度在取景框里的位置' },
     { key: 'terrainL2', label: '地形·层2', type: 'bool', def: true },

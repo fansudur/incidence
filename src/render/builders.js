@@ -21,23 +21,17 @@ export function buildSphere(pos, opacity, color, radius) {
   m.position.copy(pos); return m;
 }
 
-// 四边形(填充 + 描边)。metal=true 给金属感(活动域 W)。
-export function buildQuad(c, colorHex, opacity, metal) {
-  const g = new THREE.Group();
-  const p = new Float32Array([
-    c[0].x, c[0].y, c[0].z, c[1].x, c[1].y, c[1].z, c[2].x, c[2].y, c[2].z,
-    c[0].x, c[0].y, c[0].z, c[2].x, c[2].y, c[2].z, c[3].x, c[3].y, c[3].z,
-  ]);
+// 凸多边形 → 扇形剖分 BufferGeometry (镜面/层地面/水平地面共用; 输入 CORE 纯点或 Vector3 均可)
+function fanGeometry(poly) {
+  const P = poly.map(p => new THREE.Vector3(p.x, p.y, p.z));
+  const tris = [];
+  for (let i = 1; i < P.length - 1; i++) tris.push(P[0], P[i], P[i + 1]);
+  const verts = new Float32Array(tris.length * 3);
+  tris.forEach((p, i) => { verts[i * 3] = p.x; verts[i * 3 + 1] = p.y; verts[i * 3 + 2] = p.z; });
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
   geo.computeVertexNormals();
-  g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-    color: colorHex, transparent: true, opacity: opacity * (metal ? 0.34 : 0.20), side: THREE.DoubleSide,
-    metalness: metal ? 0.9 : 0.1, roughness: metal ? 0.12 : 0.85, emissive: colorHex, emissiveIntensity: 0.14, depthWrite: false,
-  })));
-  const loop = new THREE.BufferGeometry().setFromPoints([c[0], c[1], c[2], c[3], c[0]]);
-  g.add(new THREE.Line(loop, new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity })));
-  return g;
+  return { geo, P };
 }
 
 // 两个四边形之间的截头锥实体 (光锥段边界): 近面 nc, 远面 fc
@@ -60,22 +54,10 @@ export function buildFrustumSolid(nc, fc, colorHex, opacity) {
   return g;
 }
 
-// 四边形的两条竖直边, 返回 {long, short} (按边长)
-export function vEdges(c) {
-  const right = [c[0], c[3]], left = [c[1], c[2]];
-  return right[0].distanceTo(right[1]) >= left[0].distanceTo(left[1]) ? { long: right, short: left } : { long: left, short: right };
-}
-
 // 真·镜面四边形: 中性银色金属 + 环境反射 (不跟红黄蓝撞色)
 export function buildMirror(c, opacity) {
   const g = new THREE.Group();
-  const p = new Float32Array([
-    c[0].x, c[0].y, c[0].z, c[1].x, c[1].y, c[1].z, c[2].x, c[2].y, c[2].z,
-    c[0].x, c[0].y, c[0].z, c[2].x, c[2].y, c[2].z, c[3].x, c[3].y, c[3].z,
-  ]);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
-  geo.computeVertexNormals();
+  const { geo } = fanGeometry(c);
   g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
     color: 0xccd6e2, metalness: 1.0, roughness: 0.0, envMapIntensity: 1.35,
     transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
@@ -86,18 +68,11 @@ export function buildMirror(c, opacity) {
 }
 
 // 层地面 = 锥段"底面"(视锥下边界): 底边光线发散→朝远处向下倾斜。沿本层镜链看恰好侧对成线;
-// 伸进邻段光锥的部分(穿帮段)由 CORE splitFloorByNextPlane 切出后分开传入。
-// poly = 平面凸多边形顶点(N≥3, CORE 纯点或 Vector3 均可); 半透明着色 + 描边。
+// 伸进邻段光锥的部分(穿帮段)由 CORE splitFloorByNextCone 切出后分开传入。
+// poly = 平面凸多边形顶点(N≥3); 半透明着色 + 描边。
 export function buildFloor(poly, colorHex) {
   const g = new THREE.Group();
-  const P = poly.map(p => new THREE.Vector3(p.x, p.y, p.z));
-  const tris = [];
-  for (let i = 1; i < P.length - 1; i++) tris.push(P[0], P[i], P[i + 1]); // 凸多边形扇形剖分
-  const verts = new Float32Array(tris.length * 3);
-  tris.forEach((p, i) => { verts[i * 3] = p.x; verts[i * 3 + 1] = p.y; verts[i * 3 + 2] = p.z; });
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  geo.computeVertexNormals();
+  const { geo, P } = fanGeometry(poly);
   g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
     color: colorHex, transparent: true, opacity: 0.32, side: THREE.DoubleSide,
     metalness: 0.0, roughness: 0.95, depthWrite: false,
@@ -110,15 +85,7 @@ export function buildFloor(poly, colorHex) {
 // 水平地面 (真实世界地, 不透明): poly = 水平凸多边形 (CORE groundSection 产物)。
 // 水平面是 45°镜系统的不变量 → 各段无缝拼接、错链自遮盖, 不需邻锥裁剪。
 export function buildGround(poly, colorHex) {
-  const P = poly.map(p => new THREE.Vector3(p.x, p.y, p.z));
-  const tris = [];
-  for (let i = 1; i < P.length - 1; i++) tris.push(P[0], P[i], P[i + 1]);
-  const verts = new Float32Array(tris.length * 3);
-  tris.forEach((p, i) => { verts[i * 3] = p.x; verts[i * 3 + 1] = p.y; verts[i * 3 + 2] = p.z; });
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  geo.computeVertexNormals();
-  return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+  return new THREE.Mesh(fanGeometry(poly).geo, new THREE.MeshStandardMaterial({
     color: colorHex, metalness: 0.0, roughness: 0.92, side: THREE.DoubleSide,
   }));
 }

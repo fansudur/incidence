@@ -3,11 +3,10 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection } from '../core/activity.js';
-import { terrainOnPlane, liftAt, regionDepthInfo, warpS, mergeBands } from '../core/terrain.js';
-import { sub as vsub, normalize as vnorm, dist as vdist } from '../core/vec.js';
-import { makeLabel, buildSphere, buildQuad, buildFrustumSolid, vEdges, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
-import { SEED_COLOR } from './materials.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection, centroid, vEdges } from '../core/activity.js';
+import { terrainOnPlane, liftAt, terrainSetup } from '../core/terrain.js';
+import { makeLabel, buildSphere, buildFrustumSolid, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
+import { SAFE_COLOR, SAFE_EDGE_COLOR, BUG_COLOR, BUG_EDGE_COLOR } from './materials.js';
 
 // 单世界: 视锥追迹 (调 CORE 拿纯数据 → 渲染)。返回 { root, bug, foot }。
 // runtime.fixedFoot: 人物钉在固定世界坐标(结构性穿越演示) — 人不动, 拖参数让分层扫过他。
@@ -66,7 +65,7 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
       if (gp + 2 < mc.length) {
         const s = splitFloorByNextCone(quad, mc[gp + 1], mc[gp + 2]);
         if (params.showFloor) for (const frag of s.safe) root.add(buildFloor(frag, floorCol[gp % 3]));
-        if (params.showFloorBug && s.bug) root.add(buildFloor(s.bug, 0xff3344));
+        if (params.showFloorBug && s.bug) root.add(buildFloor(s.bug, BUG_COLOR));
       } else if (params.showFloor) root.add(buildFloor(quad, floorCol[gp % 3]));
     }
   }
@@ -89,35 +88,17 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
   // 深度包络 M₁→M₂ 渐起(最前景趋平不挡后层); 边缘全幅度切断+垂直裙边(剖切模型感)
   const terrains = []; // [ {gap, grid} ] — 人物落点采样复用
   if (params.showTerrain && !bug && mcPlain.length >= 2) {
-    const bm = data.beam;                                       // [Σ, M₁心, M₂心, ...] 中心光路(水平)
-    const S = [0];                                               // 展开累计深度
-    for (let i = 1; i < bm.length; i++) S.push(S[i - 1] + vdist(bm[i - 1], bm[i]));
-    const frameOf = (g) => {                                     // 段坐标系: P0/dir/side(含手性翻转)/S0
-      const dir = vnorm(vsub(bm[g + 2], bm[g + 1]));
-      const par = g % 2 === 0 ? 1 : -1;                          // ★镜子翻转手性: 横向轴随反射传递, 否则跨缝地貌左右颠倒
-      return { P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
-    };
-    const regs = safeRegions(mcPlain, data.seed).filter((r) => r.gap + 2 < bm.length && r.gap + 1 < mcPlain.length);
+    // 编排(展开深度/手性坐标系/冻结带合并/σ域包络)统一在 CORE terrainSetup — worldView 与测试共用, 防手抄漂移
     const basePtsOf = (g) => [mcPlain[g][2], mcPlain[g][3], mcPlain[g + 1][3]]; // 层底斜面三点
-    // 第一遍: 各层深度信息 → 接缝冻结带 [g 层尾边最浅, g+1 层头边最深] (R1 对齐衔接, 所有缝默认)
-    const infos = regs.map((r) => regionDepthInfo(r.points, basePtsOf(r.gap), frameOf(r.gap)));
-    const rawBands = [];
-    for (let i = 0; i < regs.length - 1; i++)
-      if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
-        rawBands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
-    const bands = mergeBands(rawBands);                          // ★必须合并: 重叠带会让 σ 非单调、R1 失效
-    const fpBase = {
-      hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist, // 锥高·半宽 随深度的斜率
-      rampA: warpS(S[1], bands), rampB: warpS(S[2], bands),      // 包络锚点换到 σ 域
+    const { regs, fpOf } = terrainSetup(data.beam, safeRegions(mcPlain, data.seed), basePtsOf, {
+      hSlope: params.frameH / params.fDist, wSlope: (params.frameW / 2) / params.fDist,
       seed: Math.round(params.terrainSeed ?? 7), waves: params.terrainWaves ?? 3, ampRatio: params.terrainAmp ?? 0.15,
-      headFrac: params.terrainHead ?? 0.25, bands,
-    };
-    // 第二遍: 建各层地形。范围=黄色安全区(红区腾空); R2 贴地仅第一层(gap 0)面对 M₁ 的前边。
-    // 单层开关 terrainL1/2/3(检查层间衔接) — 注意冻结带照常计算: 隐藏某层不改变其余层的地貌。
+      headFrac: params.terrainHead ?? 0.25,
+    });
+    // 范围=黄色安全区(红区腾空); R2 贴地仅第一层(fpOf 默认 gap0 才 flushFront); terrainL1/2/3 只控显示
     for (const r of regs) {
       if (params['terrainL' + (r.gap + 1)] === false) continue;
-      const fp = { ...fpBase, ...frameOf(r.gap), flushFront: r.gap === 0 };
-      const grid = terrainOnPlane(r.points, basePtsOf(r.gap), fp);
+      const grid = terrainOnPlane(r.points, basePtsOf(r.gap), fpOf(r.gap));
       if (grid) { terrains.push({ gap: r.gap, grid }); root.add(buildTerrain(grid, params.terrainOpacity ?? 1)); }
     }
   }
@@ -137,13 +118,12 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
         const m = t0.grid.meta;
         const sec = planeSection(sr[0].points, m.pa, m.n);        // 安全区在该层底斜面上的截面
         if (sec) {
-          const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 });
-          const bp = { x: c.x / sec.length, y: c.y / sec.length, z: c.z / sec.length };
+          const bp = centroid(sec);
           figFoot = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);
         }
       } else if (sr.length) {
         const sec = groundSection(sr[0].points, gY);
-        if (sec) { const c = sec.reduce((s, p) => ({ x: s.x + p.x, y: s.y + p.y, z: s.z + p.z }), { x: 0, y: 0, z: 0 }); figFoot = new THREE.Vector3(c.x / sec.length, gY, c.z / sec.length); }
+        if (sec) { const c = centroid(sec); figFoot = new THREE.Vector3(c.x, gY, c.z); }
       }
     }
     if (figFoot) root.add(buildFigure(figFoot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U));
@@ -167,8 +147,8 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     for (const r of safeRegions(mcPlain, data.seed)) {
       try {
         const geo = new ConvexGeometry(r.points.map(V3));
-        root.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xffd700, transparent: true, opacity: 0.18, side: THREE.DoubleSide, metalness: 0.1, roughness: 0.8, emissive: 0x3a2f00, emissiveIntensity: 0.4, depthWrite: false })));
-        root.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xffe24a, transparent: true, opacity: 0.6 })));
+        root.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: SAFE_COLOR, transparent: true, opacity: 0.18, side: THREE.DoubleSide, metalness: 0.1, roughness: 0.8, emissive: 0x3a2f00, emissiveIntensity: 0.4, depthWrite: false })));
+        root.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: SAFE_EDGE_COLOR, transparent: true, opacity: 0.6 })));
       } catch (e) { }
     }
   }
@@ -178,8 +158,8 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
       const op = r.kind === 'direct' ? 0.10 : 0.16;
       try {
         const g = new ConvexGeometry(r.points.map(V3));
-        root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xff3344, transparent: true, opacity: op, side: THREE.DoubleSide, metalness: 0.1, roughness: 0.85, emissive: 0xff3344, emissiveIntensity: 0.16, depthWrite: false })));
-        root.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: 0xff5566, transparent: true, opacity: 0.5 })));
+        root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: BUG_COLOR, transparent: true, opacity: op, side: THREE.DoubleSide, metalness: 0.1, roughness: 0.85, emissive: BUG_COLOR, emissiveIntensity: 0.16, depthWrite: false })));
+        root.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: BUG_EDGE_COLOR, transparent: true, opacity: 0.5 })));
       } catch (e) { }
     }
   }

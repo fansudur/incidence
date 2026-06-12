@@ -10,7 +10,7 @@
 //  其它沿用: 基面=层底斜面; 角向 w=横向/半宽(透视不变, 视线匹配的两点同 w); 手性逐折翻转;
 //  σ 自相似 log₂ 采样(层间放大, 正典 W₁<W₂<W₃; "场地拉伸"是装置固有属性, Σ 视角被透视抵消)。
 import { planeSection } from './activity.js';
-import { v, sub, dot, cross, normalize } from './vec.js';
+import { v, sub, dot, cross, normalize, dist, planeBasis } from './vec.js';
 
 // ── 确定性噪声 (无 Math.random) ─────────────────────────────────────────────
 function hash2(ix, iz, seed) {
@@ -29,7 +29,7 @@ function vnoise(u, w, seed) {
   const c = hash2(iu, iw + 1, seed), d = hash2(iu + 1, iw + 1, seed);
   return (a + (b - a) * fu) * (1 - fw) + (c + (d - c) * fu) * fw;
 }
-export function fbm(u, w, seed, oct = 4) {
+function fbm(u, w, seed, oct = 4) { // 仅模块内部使用(liftField); 不导出
   let acc = 0, amp = 0.5, f = 1;
   for (let o = 0; o < oct; o++) { acc += amp * vnoise(u * f, w * f, seed + o * 101); amp *= 0.5; f *= 2; }
   return acc;
@@ -48,6 +48,29 @@ export function mergeBands(bands) {
     else out.push(s[i].slice());
   }
   return out;
+}
+
+// ── 两遍构造编排(单一来源: worldView 与测试共用, 防手抄漂移) ──────────────────
+// beam = 中心光路点列 [Σ, M₁心, ...]; regions = safeRegions 输出; basePtsOf(g) = 层底斜面三点;
+// opts = { hSlope, wSlope, seed, waves, ampRatio, headFrac }。
+// 返回 { regs, fpOf(g, flush=g===0) } — frameOf 含手性翻转(横向轴随反射传递), bands 已合并。
+export function terrainSetup(beam, regions, basePtsOf, opts) {
+  const S = [0];                                                  // 展开累计深度
+  for (let i = 1; i < beam.length; i++) S.push(S[i - 1] + dist(beam[i - 1], beam[i]));
+  const frameOf = (g) => {
+    const dir = normalize(sub(beam[g + 2], beam[g + 1]));
+    const par = g % 2 === 0 ? 1 : -1;                             // ★镜子翻手性: side = rot90(dir)×(-1)^g
+    return { P0: beam[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
+  };
+  const regs = regions.filter((r) => r.gap + 2 < beam.length);    // 防御(当前几何下恒真)
+  const infos = regs.map((r) => regionDepthInfo(r.points, basePtsOf(r.gap), frameOf(r.gap)));
+  const raw = [];
+  for (let i = 0; i < regs.length - 1; i++)
+    if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
+      raw.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
+  const bands = mergeBands(raw);                                  // ★必须合并: 重叠带 σ 非单调 → R1 失效
+  const fpBase = { ...opts, rampA: warpS(S[1], bands), rampB: warpS(S[2], bands), bands };
+  return { regs, bands, fpOf: (g, flush = g === 0) => ({ ...fpBase, ...frameOf(g), flushFront: flush }) };
 }
 
 // ── 接缝冻结带: σ(s) — 带内冻结, 带外平移, 连续单调 ─────────────────────────
@@ -83,10 +106,15 @@ function basis(regionPoints, basePts) {
   if (n.y < 0) n = v(-n.x, -n.y, -n.z);
   const hull = planeSection(regionPoints, pa, n);
   if (!hull) return null;
-  const ref = Math.abs(n.y) < 0.9 ? v(0, 1, 0) : v(1, 0, 0);
-  const e1 = normalize(cross(n, ref)), e2 = cross(n, e1);
+  const { e1, e2 } = planeBasis(n);                    // 平面 2D 标架(与 planeSection 同构造, 单一来源在 vec)
   const to2 = (p) => ({ a: dot(sub(p, pa), e1), b: dot(sub(p, pa), e2) });
   return { pa, n, e1, e2, hull, hull2: hull.map(to2) };
+}
+// 深度方向在基面标架中的单位投影 (regionDepthInfo / 首层贴地共用)
+function dirIn2D(dir, e1, e2) {
+  const a = dot(dir, e1), b = dot(dir, e2);
+  const l = Math.hypot(a, b) || 1;
+  return { a: a / l, b: b / l };
 }
 
 // 2D 凸包边按朝向分类: 外法线的深度分量 → head(朝浅/朝观者) / tail(朝深) / side
@@ -119,13 +147,10 @@ export function regionDepthInfo(regionPoints, basePts, fp) {
   const sOf = (p) => fp.S0 + dot(sub(p, fp.P0), fp.dir);
   const ss = B.hull.map(sOf);
   const sMin = Math.min(...ss), sMax = Math.max(...ss);
-  const dproj = { a: dot(fp.dir, B.e1), b: dot(fp.dir, B.e2) };
-  const dl = Math.hypot(dproj.a, dproj.b) || 1;
-  const d2 = { a: dproj.a / dl, b: dproj.b / dl };
-  const edges = classifyEdges(B.hull2, d2);
+  const edges = classifyEdges(B.hull2, dirIn2D(fp.dir, B.e1, B.e2));
   let tailMinS = sMax, headMaxS = sMin;                // 兜底: 无对应类时退化为端值
   edges.forEach((e, i) => {
-    const s1 = ss[B.hull2.indexOf(e.p)], s2 = ss[B.hull2.indexOf(e.q)];
+    const s1 = ss[i], s2 = ss[(i + 1) % ss.length];    // edges[i] 即 hull2[i]→hull2[i+1], 直接用索引(不靠引用同一性)
     if (e.type === 'tail') tailMinS = Math.min(tailMinS, s1, s2);
     if (e.type === 'head') headMaxS = Math.max(headMaxS, s1, s2);
   });
@@ -155,9 +180,7 @@ export function terrainOnPlane(regionPoints, basePts, fp, res = 64) {
   const meta = { pa, n, e1, e2, minA, minB, sa, sb, hull2, fp, frontSegs: null, flushDist: 0 };
 
   if (fp.flushFront) {                                  // R2: 仅首层 — 前(head)边贴地, 按边界距离
-    const dproj = { a: dot(fp.dir, e1), b: dot(fp.dir, e2) };
-    const dl = Math.hypot(dproj.a, dproj.b) || 1;
-    const d2 = { a: dproj.a / dl, b: dproj.b / dl };
+    const d2 = dirIn2D(fp.dir, e1, e2);
     meta.frontSegs = classifyEdges(hull2, d2).filter((e) => e.type === 'head');
     const depths = hull2.map((q) => q.a * d2.a + q.b * d2.b);
     const ext = Math.max(...depths) - Math.min(...depths) || 1e-9; // 层深(基面内)

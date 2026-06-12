@@ -4,40 +4,22 @@
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
 import { safeRegions } from '../src/core/activity.js';
-import { terrainOnPlane, pointAt, liftField, liftAt, regionDepthInfo, warpS, mergeBands } from '../src/core/terrain.js';
-import { v, sub, dot, cross, normalize, dist, lerp } from '../src/core/vec.js';
+import { terrainOnPlane, pointAt, liftField, liftAt, warpS, mergeBands, terrainSetup } from '../src/core/terrain.js';
+import { v, sub, dot, cross, normalize, lerp } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
 const S0pt = v(0, 0, 0);
 
-// 复刻 worldView 两遍构造: frames → regionDepthInfo → 冻结带 → fp
+// 编排走 CORE terrainSetup — 与 worldView 同一来源(此前测试手抄一份有静默漂移风险, 审查后统一)
 function setup(p = base, opts = {}) {
   const r = traceFrustum(p);
   const mc = r.endMirror ? [...r.mirrors, r.endMirror] : r.mirrors;
-  const bm = r.beam;
-  const S = [0];
-  for (let i = 1; i < bm.length; i++) S.push(S[i - 1] + dist(bm[i - 1], bm[i]));
-  const frameOf = (g) => {
-    const dir = normalize(sub(bm[g + 2], bm[g + 1]));
-    const par = g % 2 === 0 ? 1 : -1;
-    return { P0: bm[g + 1], dir, side: { x: -dir.z * par, y: 0, z: dir.x * par }, S0: S[g + 1] };
-  };
-  const regs = safeRegions(mc, S0pt).filter((q) => q.gap + 2 < bm.length && q.gap + 1 < mc.length);
   const basePtsOf = (g) => [mc[g][2], mc[g][3], mc[g + 1][3]];
-  const infos = regs.map((q) => regionDepthInfo(q.points, basePtsOf(q.gap), frameOf(q.gap)));
-  const rawBands = [];
-  for (let i = 0; i < regs.length - 1; i++)
-    if (infos[i] && infos[i + 1] && regs[i + 1].gap === regs[i].gap + 1 && infos[i].tailMinS < infos[i + 1].headMaxS)
-      rawBands.push([infos[i].tailMinS, infos[i + 1].headMaxS]);
-  const bands = mergeBands(rawBands); // 与 worldView 同: 重叠带必须合并
-  const fpBase = {
+  const { regs, bands, fpOf } = terrainSetup(r.beam, safeRegions(mc, S0pt), basePtsOf, {
     hSlope: p.frameH / p.fDist, wSlope: (p.frameW / 2) / p.fDist,
-    rampA: warpS(S[1], bands), rampB: warpS(S[2], bands),
-    seed: opts.seed ?? 7, waves: opts.waves ?? 3, ampRatio: opts.ampRatio ?? 0.15,
-    headFrac: opts.headFrac ?? 0.25, bands,
-  };
-  const fpOf = (g, flush = g === 0) => ({ ...fpBase, ...frameOf(g), flushFront: flush });
-  return { mc, bm, S, regs, infos, bands, basePtsOf, fpOf };
+    seed: opts.seed ?? 7, waves: opts.waves ?? 3, ampRatio: opts.ampRatio ?? 0.15, headFrac: opts.headFrac ?? 0.25,
+  });
+  return { mc, regs, bands, basePtsOf, fpOf };
 }
 // 在段坐标系里按 (s, 角向θ) 造水平点
 const ptAt = (fp, s, th) => ({
@@ -109,8 +91,7 @@ test('R2-b 其余层不贴地: 第二层 liftAt 与原始场逐点一致 (作者
   assert(fp1.flushFront === false, '第二层不应启用贴地');
   const g = terrainOnPlane(regs[1].points, basePtsOf(regs[1].gap), fp1);
   const m = g.meta;
-  assert(!m.frontSegs, '第二层不应有贴地前边');
-  const to3D = (q) => ({ x: m.pa.x + m.e1.x * q.a + m.e1.y * 0 + m.e2.x * q.b, y: m.pa.y + m.e1.y * q.a + m.e2.y * q.b, z: m.pa.z + m.e1.z * q.a + m.e2.z * q.b });
+  assert(!m.frontSegs || !m.frontSegs.length, '第二层不应有贴地前边');
   for (const q of m.hull2) {
     const p = { x: m.pa.x + m.e1.x * q.a + m.e2.x * q.b, y: m.pa.y + m.e1.y * q.a + m.e2.y * q.b, z: m.pa.z + m.e1.z * q.a + m.e2.z * q.b };
     assert(Math.abs(liftAt(m, p).lift - liftField(fp1, p).lift) < 1e-12, '第二层各边界点应=原始场(无贴地)');
