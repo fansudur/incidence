@@ -14,7 +14,7 @@ test('peoplePlan 人数落在 [1, 上限]', () => {
   }
 });
 
-test('peoplePlan 同组共享 dir/speed (结伴同行), 相位贴近', () => {
+test('peoplePlan 同组共享 speed (结伴同行), 相位贴近', () => {
   // 找一个有 2 人同组的种子
   let plan = null;
   for (let s = 1; s < 50 && !plan; s++) { const p = peoplePlan(s, 0, 4); if (p.some((x, i) => p.some((y, j) => i !== j && x.group === y.group))) plan = p; }
@@ -22,7 +22,7 @@ test('peoplePlan 同组共享 dir/speed (结伴同行), 相位贴近', () => {
   const byGroup = {};
   for (const p of plan) (byGroup[p.group] ??= []).push(p);
   for (const g of Object.values(byGroup)) if (g.length >= 2) {
-    assert(g.every((x) => x.dir === g[0].dir && x.speed === g[0].speed), '同组方向/速度应一致');
+    assert(g.every((x) => x.speed === g[0].speed), '同组速度应一致(结伴同步)');
     assert(Math.abs(((g[1].phase - g[0].phase) % 1)) < 0.2, '同组相位应贴近(结伴)');
   }
 });

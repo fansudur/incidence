@@ -159,8 +159,8 @@ export function groundSection(points, h) {
 }
 
 // 同层人群编排(确定性·零 three): 由种子+层号生成 N 个人, 分成"结伴(2人)/独行(1人)"小组。
-// 组间速度/方向各异→沿环线漂移→相遇; 同组相位贴近→结伴同行。三层种子不同→布置不雷同。
-// 返回 [{ group, dir(±1), speed(0.7~1.3 因子), phase(0~1 环线初相) }]。无 Math.random → 可复现、预设稳定、不随重建跳动。
+// 同组共享速度+相位贴近→结伴一起游走; 三层种子不同→布置不雷同。无 Math.random → 可复现、预设稳定、不随重建跳动。
+// 返回 [{ group, speed(0.7~1.3 因子), phase(0~1 游走初相) }]。
 function rng(s) { // mulberry32(整数种子→确定性序列)
   let a = (s | 0) || 1;
   return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -173,10 +173,10 @@ export function peoplePlan(seed, gap, maxCount = 3) {
   let i = 0, group = 0;
   while (i < n) {
     const size = (n - i >= 2 && rnd() < 0.45) ? 2 : 1;     // 结伴(2) 或 独行(1)
-    const dir = rnd() < 0.5 ? 1 : -1;
+    rnd();                                                  // 占位: 原"环线方向"已随无规则游走弃用; 保留这次抽取使种子布置不变
     const speed = 0.7 + rnd() * 0.6;
     const base = rnd();
-    for (let k = 0; k < size; k++) people.push({ group, dir, speed, phase: (base + k * 0.05) % 1 }); // 同组贴近=结伴
+    for (let k = 0; k < size; k++) people.push({ group, speed, phase: (base + k * 0.05) % 1 }); // 同组贴近=结伴
     i += size; group++;
   }
   return people;

@@ -126,7 +126,7 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
 
   // 占位人 · 每层人群(作者方案): 每个有地形的安全区放 N 人(种子确定性编排, 三层不雷同), 同一身高 ——
   // 解读: 红绿蓝=不同的人/不同世界/不同人生但同框; 同层内结伴+相遇(交互在 index.html 逐帧驱动)。
-  // 每人锚定优先级: placed['figure-层-序'](拖放存档) > fixedFoot(仅层1首人, 结构性穿越钉点) > 环线初相点贴地形。
+  // 每人锚定优先级: placed['figure-层-序'](拖放存档) > fixedFoot(仅层1首人, 结构性穿越钉点) > 区内确定性散点(hullPoint)。
   let figFoot = null;                            // 层1首人脚点(穿越捕获 lastFoot 用)
   const figures = [];                            // [{gap,idx,id,obj,meta,group,dir,speed,phase}] — 行走/相遇逐帧驱动
   if (params.showFigures && !bug && mcPlain.length >= 2) {
@@ -145,11 +145,11 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
         else if (wp) foot = new THREE.Vector3(wp.x, wp.y, wp.z);                // 行走中重建: 接上次位置, 不跳
         else { const hp = hullPoint(m, spec.phase, (spec.phase * 7.13 + idx * 0.31) % 1, (spec.phase * 13.7 + idx * 0.57) % 1); foot = new THREE.Vector3(hp.point.x, hp.point.y, hp.point.z); } // 区内确定性散点
         if (!foot) return;
-        const f = buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U,
-          mixHex(0xcfc7ba, LAYER_TINT[r.gap % 3], 0.6)); // 按层染色(同地形层色)
+        const col = params.figureTint === false ? 0xcfc7ba : mixHex(0xcfc7ba, LAYER_TINT[r.gap % 3], 0.6); // 关=统一米白; 开=按层染色(同地形层色)
+        const f = buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U, col);
         f.userData.dragId = id;
         root.add(f);
-        figures.push({ gap: r.gap, idx, id, obj: f, meta: m, group: spec.group, dir: spec.dir, speed: spec.speed, phase: spec.phase });
+        figures.push({ gap: r.gap, idx, id, obj: f, meta: m, group: spec.group, speed: spec.speed, phase: spec.phase });
         if (r.gap === 0 && idx === 0) figFoot = foot;
       });
     }
@@ -229,7 +229,7 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     }
   }
   if (bug) root.add(buildSphere(beam[beam.length - 1], 1, 0xff5ad0, sR * 1.4));
-  return { root, bug, foot: figFoot, figures }; // figures: 行走逐帧驱动(各层各自的环线 meta), 不经 rebuild
+  return { root, bug, foot: figFoot, figures }; // figures: 游走逐帧驱动(各层各自的地形 meta), 不经 rebuild
 }
 
 // 多世界: 绕 Y 均分旋转复制; 返回合并 group + 最深穿帮层(0=无) + 首世界人物脚点(穿越模式捕获用)。
@@ -243,7 +243,7 @@ export function buildAllWorlds(params, runtime = {}) {
     all.add(w.root);
     bugLayer = Math.max(bugLayer, w.bug);
     if (k === 0) foot = w.foot;
-    figures = figures.concat(w.figures); // 各世界都收(多世界行走同步): 同参旋转复制 → 环线周长一致, 相位推进天然一致
+    figures = figures.concat(w.figures); // 各世界都收(多世界游走同步): 同参旋转复制 → 安全区一致, 游走推进天然一致
   }
   return { group: all, bugLayer, foot, figures };
 }
