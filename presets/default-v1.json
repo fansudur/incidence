@@ -1,0 +1,112 @@
+{
+  "app": "incidence",
+  "version": 1,
+  "params": {
+    "layerCount": 3,
+    "mAngle": [
+      45,
+      45,
+      45
+    ],
+    "mDist": [
+      254,
+      359,
+      634
+    ],
+    "mEndAngle": 45,
+    "mDistEnd": 880,
+    "showEndMirror": false,
+    "fDist": 170,
+    "frameW": 60,
+    "frameH": 40,
+    "wallSize": 8,
+    "showWall": true,
+    "sunAz": 135,
+    "sunEl": 48,
+    "sunIntensity": 2.6,
+    "skyEnv": false,
+    "skyTop": "#4a78b8",
+    "skyHorizon": "#d8c4a8",
+    "zoneSun": true,
+    "zoneSunAz": [
+      360,
+      360,
+      360
+    ],
+    "zoneSunEl": [
+      48,
+      48,
+      48
+    ],
+    "zoneSunInt": [
+      2.6,
+      2.6,
+      2.6
+    ],
+    "zoneSunDist": 120,
+    "zoneSunSpread": 1.4,
+    "zoneSunSoft": 0.6,
+    "showTerrain": true,
+    "terrainL1": true,
+    "terrainL2": true,
+    "terrainL3": true,
+    "terrainOpacity": 1,
+    "terrainTint": true,
+    "terrainAmp": 0.15,
+    "terrainWaves": 3,
+    "terrainSeed": 7,
+    "terrainHead": 0.25,
+    "terrainEnd1": 0.04,
+    "terrainEnd2": 0.14,
+    "terrainEnd3": 0.3,
+    "showFloor": false,
+    "showFloorBug": false,
+    "showGround": false,
+    "groundY": -30,
+    "showFigures": true,
+    "figureH": 80,
+    "figureWalk": false,
+    "walkSpeed": 20,
+    "figureFixed": false,
+    "editDrag": false,
+    "realMirror": false,
+    "pathTrace": true,
+    "ptScale": 1,
+    "ptBounces": 10,
+    "ptSamples": 512,
+    "ptDynamic": true,
+    "ptDynScale": 0.6,
+    "worldCount": 1,
+    "expand": 1,
+    "autoPlay": false,
+    "autoRotate": false,
+    "showSeed": true,
+    "showBeam": true,
+    "showFrustum": true,
+    "showWorlds": true,
+    "showUsable": false,
+    "showBug": false,
+    "showActiveVol": false,
+    "showLabels": true,
+    "showMirrorId": true,
+    "showGrid": true,
+    "showScenery": false
+  },
+  "view": {
+    "name": "Σ眼",
+    "lift": 4,
+    "eyeFovScale": 1
+  },
+  "camera": {
+    "pos": [
+      0,
+      4,
+      1.0409497792752501e-16
+    ],
+    "target": [
+      1.7,
+      4,
+      0
+    ]
+  }
+}
