@@ -19,6 +19,13 @@
     font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     color: #ff5ad0; text-shadow: 0 1px 2px #000; pointer-events: none; display: none; max-width: 60%;
   }
+  #play { /* 页面浮动 播放/停止: 直接控人物行走, 不用进面板找 */
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 11;
+    font: 13px/1 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 0.12em;
+    color: #e6eef8; background: rgba(18,24,32,0.72); border: 1px solid #2a3a4a; border-radius: 20px;
+    padding: 9px 20px; cursor: pointer; user-select: none; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  }
+  #play:hover { background: rgba(40,52,66,0.9); }
   /* 移动端: 侧边栏由 JS 默认收起; 标识两行不挡画面, 各端均显示 */
   @media (max-width: 820px) {            /* 窄屏: 面板限宽可滚动 + 控件加大便于触摸 */
     .lil-gui.root { --width: 84vw; max-width: 320px; max-height: 88vh; }
@@ -33,6 +40,7 @@
   <div id="markName">Incidence</div>
 </div>
 <div id="warn"></div>
+<button id="play">▶ 播放</button>
 
 <script type="importmap">
 {
@@ -54,7 +62,7 @@ import { buildGui } from './src/app/gui.js';
 import { createScene } from './src/render/scene.js';
 import { buildAllWorlds } from './src/render/worldView.js';
 import { U } from './src/core/frustum.js';               // 原始单位→渲染单位 (别再硬编码 100)
-import { loopPoint } from './src/core/terrain.js';       // 行走环线采样(安全区内, 脚贴地形)
+import { hullPoint, surfaceAt } from './src/core/terrain.js'; // 无规则游走: 区内随机航点 + 参数坐标→地表点(脚贴地形)
 import { createMultiview } from './src/render/multiview.js'; // 三视口子系统(相机/控制器/路由/分隔条/渲染 自持)
 import { createEditorDrag } from './src/render/editorDrag.js'; // 编辑·拖拽子系统(坐标轴手柄+自由拖, 全视口拾取)
 import { createPTScheduler } from './src/render/ptScheduler.js'; // 路径追踪调度器(BVH 重建/渲染分支/动态行走帧)
@@ -76,7 +84,7 @@ const isMobile = matchMedia('(max-width: 820px)').matches || (matchMedia('(point
 if (isMobile) { params.pathTrace = false; params.realMirror = true; }
 
 let currentView = '透视';                                        // 单视口的当前视图预设
-const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5, eyeFovScale: 1.0 }; // 模型升高 / 三视口 / 分隔比例 / Σ眼视野放宽(1=竖直正好等于F, >1=看到框外观影墙)
+const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5, eyeFovScale: 1.1 }; // 模型升高 / 三视口 / 分隔比例 / Σ眼视野放宽(作者定版1.1=留一圈黑边; 1=竖直正好等于F)
 
 const { renderer, scene, controls, persp, ortho, eyeCam, getCamera, useCamera, updateEnv } = createScene(params); // 透视+正交+Σ眼 三相机 + 天空/太阳 → src/render/scene.js
 const mv = createMultiview({ // 三视口 → src/render/multiview.js (回调都在使用时才求值)
@@ -94,9 +102,10 @@ const warnEl = document.querySelector('#warn');
 let worldGroup = null, framed = false;
 let figureFixedFoot = null, lastFoot = null; // 结构性穿越: 固定模式钉住的脚点 / 最近一次计算的脚点(开启瞬间捕获)
 const placed = {}; // 拖拽编辑存档: dragId → {x,y,z} (root 局部坐标); 重建后由 worldView 重新套用
-let walkHandles = [];        // 行走句柄 [{gap,obj,meta,t,last}] — 每层一人各走各的环线
-const walkPhase = {};        // gap → 环线参数 t (跨 rebuild 保持, 行走不因重建跳相位)
-const walkYaw = {};          // gap → 行走朝向 yaw (跨 rebuild 保持, 停走重建后不回弹到默认朝向)
+let walkHandles = [];        // 行走句柄 — 每人在安全区内无规则游走(朝航点走, 到了换航点)
+const wanderTarget = {};     // 'gap-group' → {a,b} 当前航点(参数坐标); 结伴同组共享一个航点; 跨 rebuild 保持
+const walkPos = {};          // id → {x,y,z} 当前世界位置; 每帧更新, 行走中重建时接上不跳
+const walkYaw = {};          // id → 朝向 yaw; 跨 rebuild 保持, 停走重建后不回弹到默认朝向
 
 const editor = createEditorDrag({ // 坐标轴手柄+自由体拖拽; pt 经闭包延迟取值(两子系统互相引用)
   scene, domElement: renderer.domElement, camera: persp, controls, params, viewState, mv, placed,
@@ -111,12 +120,20 @@ function rebuild() {
     scene.remove(worldGroup);
     worldGroup.traverse(o => { o.geometry?.dispose?.(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
   }
-  const { group, bugLayer, foot, figures } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
+  const { group, bugLayer, foot, figures } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed, walkPos }); // 视锥追迹建世界 → src/render/worldView.js
   if (foot) lastFoot = foot;
-  walkHandles = (figures || []).map(f => {              // 相位+朝向跨重建保持(初相错开免三人同步)
-    const yaw = walkYaw[f.gap];
-    if (yaw !== undefined) f.obj.userData.setHeading?.(yaw); // 复原行走朝向: 否则停走重建后人转回默认朝向(+Z)
-    return { ...f, t: walkPhase[f.gap] ?? (f.gap * 0.37) % 1, yaw, last: null };
+  const seenGroup = new Set();
+  walkHandles = (figures || []).map(f => {              // 朝向按【人】(f.id)跨重建保持; 游走位置用参数坐标(a,b)
+    const yaw = walkYaw[f.id];
+    if (yaw !== undefined) f.obj.userData.setHeading?.(yaw); // 复原朝向: 否则停走重建后人转回默认朝向(+Z)
+    const m = f.meta, p = f.obj.position;                // 由当前世界位置反投到基面标架 → (a,b)
+    const da = p.x - m.pa.x, db = p.y - m.pa.y, dc = p.z - m.pa.z;
+    const a = da * m.e1.x + db * m.e1.y + dc * m.e1.z;
+    const b = da * m.e2.x + db * m.e2.y + dc * m.e2.z;
+    const gk = f.gap + '-' + f.group;
+    const isLeader = !seenGroup.has(gk); seenGroup.add(gk); // 每组首人=领队(驱动换航点); 其余人带小偏移结伴
+    const oa = ((f.idx * 0.37) % 1 - 0.5) * 0.5, ob = ((f.idx * 0.61) % 1 - 0.5) * 0.5;
+    return { ...f, gk, isLeader, a, b, oa, ob, yaw, last: null, state: 'walk', talkTimer: 0, cooldown: 0, pos: null };
   });
   worldGroup = group;
   editor.reattach(worldGroup);
@@ -201,6 +218,12 @@ const { gui, ctrls } = buildGui(params, PARAM_SCHEMA, rebuild);
 const expandCtrl = ctrls.expand; // 动画循环里要 updateDisplay
 if (isMobile) gui.close(); // 移动端: 侧边栏默认收起(点标题栏可展开/收起)
 
+// 页面浮动 播放/停止: 点一下=切换「人物行走」(复用面板控制器的全部启停逻辑, 含 PT 定格); 标签随状态同步
+const playBtn = document.querySelector('#play');
+function updatePlay() { playBtn.textContent = params.figureWalk ? '⏸ 停止' : '▶ 播放'; }
+playBtn.addEventListener('click', () => ctrls.figureWalk?.setValue(!params.figureWalk)); // setValue 会触发 onChange
+updatePlay();
+
 // 路径追踪精度: 改这几项不必整场重建(分辨率/反弹实时改, 采样上限主循环直接读), 只重置累积续渲染 → 拖动即时生效
 for (const k of ['ptScale', 'ptBounces', 'ptSamples']) ctrls[k]?.onChange(() => pt.applyOpts());
 
@@ -247,11 +270,12 @@ ctrls.figureWalk?.onChange(v => {
   if (v) {
     if (params.pathTrace && !params.ptDynamic) { params.pathTrace = false; ctrls.pathTrace?.updateDisplay(); pt.invalidate(); }
     if (params.figureFixed) { params.figureFixed = false; ctrls.figureFixed?.updateDisplay(); figureFixedFoot = null; }
-    for (const h of walkHandles) delete placed['figure-' + h.gap]; // 行走接管全部人物位置
+    for (const h of walkHandles) delete placed[h.id]; // 行走接管全部人物位置
   } else {
-    for (const h of walkHandles) if (h.last) placed['figure-' + h.gap] = { ...h.last }; // 各自停在原地
+    for (const h of walkHandles) placed[h.id] = { x: h.obj.position.x, y: h.obj.position.y, z: h.obj.position.z }; // 各自停在原地(含交谈中)
     pt.freezeWalk(); // 定格: 恢复全分辨率与库默认节奏(500ms 渐显正好是"凝固感") → rebuild 后累积
   }
+  updatePlay();    // 面板里改也同步页面按钮标签
   rebuild();
 });
 
@@ -282,7 +306,7 @@ ctrls.pathTrace?.onChange(v => {
     if (params.autoPlay) { params.autoPlay = false; ctrls.autoPlay?.updateDisplay(); }
     if (params.figureWalk && !params.ptDynamic) { // 非动态模式: 开PT=定格停走(各自留位)
       params.figureWalk = false; ctrls.figureWalk?.updateDisplay();
-      for (const h of walkHandles) if (h.last) placed['figure-' + h.gap] = { ...h.last };
+      for (const h of walkHandles) placed[h.id] = { x: h.obj.position.x, y: h.obj.position.y, z: h.obj.position.z };
     }
     suppressScaffold();
   }
@@ -315,27 +339,74 @@ function animate() {
     params.expand = Math.sin(clock.elapsedTime * 0.6) * 0.5 + 0.5;
     expandCtrl.updateDisplay(); rebuild();
   }
-  if (params.figureWalk && walkHandles.length) { // 行走: 每层一人各走各的环线(逐帧移动, 不重建), 脚贴各自地形
-    const step = ((params.walkSpeed ?? 60) / U) * dt;            // 本帧走过的场景距离
+  if (params.figureWalk && walkHandles.length) { // 无规则游走+相遇: 每人朝区内航点走, 到了换航点; 同层异组靠近→面对面交谈
+    const base = ((params.walkSpeed ?? 60) / U) * dt;           // 基础步距(场景单位); 每人再乘各自 speed 因子
+    const ARRIVE = 0.25 * ((params.figureH ?? 80) / U);        // 到达航点阈值
+    // (1) 按状态推进/动画(游走在参数坐标 a,b 里, 始终在安全区内、脚贴地形), 记录世界点 pos
     for (const h of walkHandles) {
-      const { point, perimeter } = loopPoint(h.meta, h.t);
-      h.t = (h.t + step / Math.max(1e-6, perimeter)) % 1;        // 同速 → 深层圈大走得久(物理一致)
-      walkPhase[h.gap] = h.t;
-      if (h.last) {                                              // 朝向: 顺位移方向(平滑转, 防低速抖动)
-        const dx = point.x - h.last.x, dz = point.z - h.last.z;
-        if (dx * dx + dz * dz > 1e-10) {
-          const tgt = Math.atan2(dx, dz), cur = h.yaw ?? tgt;   // 人形默认朝 +Z(髋绕X摆=前后在Z) → yaw=atan2(dx,dz)
+      if (h.state === 'talk') {                                  // 交谈: 站定比划, 不移动
+        h.talkTimer -= dt;
+        h.obj.userData.talk?.(clock.elapsedTime + h.gap + h.idx * 0.6); // 各人错相位, 不齐刷
+        const sp = surfaceAt(h.meta, h.a, h.b); h.pos = sp;
+        h.obj.position.set(sp.x, sp.y, sp.z); walkPos[h.id] = { x: sp.x, y: sp.y, z: sp.z };
+        if (h.talkTimer <= 0) { h.state = 'walk'; h.cooldown = 2.0; h.last = null; } // 谈完→走开 + 冷却防即刻重触
+        continue;
+      }
+      if (h.cooldown > 0) h.cooldown -= dt;
+      if (!wanderTarget[h.gk]) wanderTarget[h.gk] = hullPoint(h.meta, Math.random(), Math.random(), Math.random()); // 本组航点(领队驱动, 结伴共享)
+      const tg = wanderTarget[h.gk], ta = tg.a + h.oa, tb = tg.b + h.ob; // 各人带小偏移→不叠一点
+      const da = ta - h.a, db = tb - h.b, dlen = Math.hypot(da, db), stepLen = h.speed * base;
+      if (dlen > 1e-5) { const k = Math.min(1, stepLen / dlen); h.a += da * k; h.b += db * k; } // 朝航点走一步
+      if (h.isLeader && dlen < ARRIVE) wanderTarget[h.gk] = hullPoint(h.meta, Math.random(), Math.random(), Math.random()); // 领队到达→换航点
+      const sp = surfaceAt(h.meta, h.a, h.b); h.pos = sp;
+      if (dlen > 1e-5) {                                         // 朝向: 顺移动方向(世界 = e1·da + e2·db 的水平投影)
+        const m = h.meta, wx = m.e1.x * da + m.e2.x * db, wz = m.e1.z * da + m.e2.z * db;
+        if (wx * wx + wz * wz > 1e-10) {
+          const tgt = Math.atan2(wx, wz), cur = h.yaw ?? tgt;
           let d = tgt - cur; d = Math.atan2(Math.sin(d), Math.cos(d));
-          h.yaw = cur + d * Math.min(1, 12 * dt);
-          h.obj.userData.setHeading?.(h.yaw);
-          walkYaw[h.gap] = h.yaw;                              // 持久化朝向 → 停走重建后复原
+          h.yaw = cur + d * Math.min(1, 8 * dt);
+          h.obj.userData.setHeading?.(h.yaw); walkYaw[h.id] = h.yaw;
         }
       }
-      const stride = h.obj.userData.strideLen || 50;            // 步态相位 = 累计走过距离 / 步幅(初相按层错开)
-      h.gaitPhase = (h.gaitPhase ?? h.gap * 0.3) + step / stride;
+      const stride = h.obj.userData.strideLen || 50;
+      h.gaitPhase = (h.gaitPhase ?? h.phase) + stepLen / stride;
       h.obj.userData.gait?.(h.gaitPhase);
-      h.obj.position.set(point.x, point.y, point.z);
-      h.last = { x: point.x, y: point.y, z: point.z };
+      h.obj.position.set(sp.x, sp.y, sp.z); walkPos[h.id] = { x: sp.x, y: sp.y, z: sp.z };
+    }
+    // (2) 相遇检测: 同层、不同组、靠近 → 进入交谈并面朝对方(结伴的两人不互相触发; 第三人走近会让双方都转向他)
+    const D = 1.2 * ((params.figureH ?? 80) / U), D2 = D * D;
+    for (const a of walkHandles) {
+      if (a.state === 'talk' || a.cooldown > 0 || !a.pos) continue;
+      for (const b of walkHandles) {
+        if (b === a || b.gap !== a.gap || b.group === a.group || !b.pos) continue;
+        const dx = a.pos.x - b.pos.x, dz = a.pos.z - b.pos.z;
+        if (dx * dx + dz * dz < D2) {
+          a.state = 'talk'; a.talkTimer = 2.5;
+          const yaw = Math.atan2(b.pos.x - a.pos.x, b.pos.z - a.pos.z); // 面朝对方
+          a.yaw = yaw; a.obj.userData.setHeading?.(yaw); walkYaw[a.id] = yaw; a.last = null;
+          break;
+        }
+      }
+    }
+    // (3) 软碰撞: 同层任意两人太近 → 互相推开(在参数坐标 a,b 里), 防穿模/叠加; 推完重新贴地(仍在安全区内)
+    const SEP = 0.5 * ((params.figureH ?? 80) / U), SEP2 = SEP * SEP;
+    let bumped = false;
+    for (let i = 0; i < walkHandles.length; i++) {
+      const A = walkHandles[i];
+      for (let j = i + 1; j < walkHandles.length; j++) {
+        const B = walkHandles[j];
+        if (B.gap !== A.gap) continue;                  // 跨层不在同一空间, 不碰撞
+        let da = A.a - B.a, db = A.b - B.b; const d2 = da * da + db * db;
+        if (d2 >= SEP2) continue;
+        let d = Math.sqrt(d2);
+        if (d < 1e-6) { da = (A.idx - B.idx) || 1; db = 0; d = Math.abs(da); } // 完全重合→确定性错开
+        const push = (SEP - d) * 0.5; da /= d; db /= d; // 各推开一半重叠
+        A.a += da * push; A.b += db * push; B.a -= da * push; B.b -= db * push; bumped = true;
+      }
+    }
+    if (bumped) for (const h of walkHandles) {          // 被推动的人重新落到地表
+      const sp = surfaceAt(h.meta, h.a, h.b); h.pos = sp;
+      h.obj.position.set(sp.x, sp.y, sp.z); walkPos[h.id] = { x: sp.x, y: sp.y, z: sp.z };
     }
     pt.dynamicWalkFrame(); // 动态PT: 拓扑不变 → bvh.refit 快路径, 每帧1采样=活的噪点画面(细节见 ptScheduler.js)
   }

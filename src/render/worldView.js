@@ -3,8 +3,8 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
-import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection, centroid, vEdges } from '../core/activity.js';
-import { terrainOnPlane, liftAt, terrainSetup } from '../core/terrain.js';
+import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection, centroid, vEdges, peoplePlan } from '../core/activity.js';
+import { terrainOnPlane, liftAt, terrainSetup, hullPoint } from '../core/terrain.js';
 import { makeLabel, buildSphere, buildFrustumSolid, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure, buildZoneSun } from './builders.js';
 import { SAFE_COLOR, SAFE_EDGE_COLOR, BUG_COLOR, BUG_EDGE_COLOR } from './materials.js';
 
@@ -124,31 +124,34 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
     }
   }
 
-  // 占位人 · 每层一人(作者方案): 每个有地形的安全区放一人, 同一身高 —— 解读A 的活画面:
-  // 人同大、空间逐层放大, 三层的人受光面各不相同(逐层旋转90°)。
-  // 每人锚定优先级: placed['figure-层号'](拖放存档) > fixedFoot(仅层1, 结构性穿越钉点) > 安全区质心贴地形。
-  let figFoot = null;                            // 层1 脚点(穿越捕获 lastFoot 用)
-  const figures = [];                            // [{gap, obj, meta}] — 行走逐帧驱动
+  // 占位人 · 每层人群(作者方案): 每个有地形的安全区放 N 人(种子确定性编排, 三层不雷同), 同一身高 ——
+  // 解读: 红绿蓝=不同的人/不同世界/不同人生但同框; 同层内结伴+相遇(交互在 index.html 逐帧驱动)。
+  // 每人锚定优先级: placed['figure-层-序'](拖放存档) > fixedFoot(仅层1首人, 结构性穿越钉点) > 环线初相点贴地形。
+  let figFoot = null;                            // 层1首人脚点(穿越捕获 lastFoot 用)
+  const figures = [];                            // [{gap,idx,id,obj,meta,group,dir,speed,phase}] — 行走/相遇逐帧驱动
   if (params.showFigures && !bug && mcPlain.length >= 2) {
     for (const r of safeRegions(mcPlain, data.seed)) {
       const tr = terrains.find((t) => t.gap === r.gap);
       if (!tr) continue;                         // 该层地形隐藏/缺失 → 无地可站, 不放人
       const m = tr.grid.meta;
-      let foot = null;
-      const pl = runtime.placed?.['figure-' + r.gap];
-      if (pl) foot = new THREE.Vector3(pl.x, pl.y, pl.z);
-      else if (r.gap === 0 && runtime.fixedFoot) foot = new THREE.Vector3(runtime.fixedFoot.x, runtime.fixedFoot.y, runtime.fixedFoot.z);
-      else {
-        const sec = planeSection(r.points, m.pa, m.n);            // 安全区在该层底斜面上的截面
-        if (sec) { const bp = centroid(sec); foot = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z); }
-      }
-      if (!foot) continue;
-      const f = buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U,
-        mixHex(0xcfc7ba, LAYER_TINT[r.gap % 3], 0.6)); // 按层染色(同地形层色): 轨迹/比例一眼可辨
-      f.userData.dragId = 'figure-' + r.gap;
-      root.add(f);
-      figures.push({ gap: r.gap, obj: f, meta: m });
-      if (r.gap === 0) figFoot = foot;
+      const plan = peoplePlan(data.seed, r.gap, params.peopleMax ?? 3);
+      plan.forEach((spec, idx) => {
+        const id = `figure-${r.gap}-${idx}`;
+        let foot = null;
+        const pl = runtime.placed?.[id];
+        const wp = runtime.walkPos?.[id];
+        if (pl) foot = new THREE.Vector3(pl.x, pl.y, pl.z);
+        else if (r.gap === 0 && idx === 0 && runtime.fixedFoot) foot = new THREE.Vector3(runtime.fixedFoot.x, runtime.fixedFoot.y, runtime.fixedFoot.z);
+        else if (wp) foot = new THREE.Vector3(wp.x, wp.y, wp.z);                // 行走中重建: 接上次位置, 不跳
+        else { const hp = hullPoint(m, spec.phase, (spec.phase * 7.13 + idx * 0.31) % 1, (spec.phase * 13.7 + idx * 0.57) % 1); foot = new THREE.Vector3(hp.point.x, hp.point.y, hp.point.z); } // 区内确定性散点
+        if (!foot) return;
+        const f = buildFigure(foot, new THREE.Vector3(0, 1, 0), (params.figureH ?? 80) / U,
+          mixHex(0xcfc7ba, LAYER_TINT[r.gap % 3], 0.6)); // 按层染色(同地形层色)
+        f.userData.dragId = id;
+        root.add(f);
+        figures.push({ gap: r.gap, idx, id, obj: f, meta: m, group: spec.group, dir: spec.dir, speed: spec.speed, phase: spec.phase });
+        if (r.gap === 0 && idx === 0) figFoot = foot;
+      });
     }
   }
 
@@ -164,7 +167,10 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
       const bp = centroid(sec);
       const surf = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);   // 黄区表面中心 = 灯对准点
       let rad = 0; for (const q of sec) rad = Math.max(rad, Math.hypot(q.x - bp.x, q.y - bp.y, q.z - bp.z)); // 黄区半径
-      root.add(buildZoneSun(surf, rad, params, r.gap));
+      const ps = runtime.placed?.['zonesun-' + r.gap];                       // 拖放存档的灯位(优先)
+      const sun = buildZoneSun(surf, rad, params, r.gap, ps ? new THREE.Vector3(ps.x, ps.y, ps.z) : null);
+      sun.traverse((o) => { if (o.userData.isZoneSunMarker) o.visible = !!params.editDrag; }); // 标记仅"编辑拖拽"时显示, 不污染成像
+      root.add(sun);
     }
   }
 

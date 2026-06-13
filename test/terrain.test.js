@@ -4,7 +4,7 @@
 import { test, assert } from './harness.js';
 import { traceFrustum } from '../src/core/frustum.js';
 import { safeRegions } from '../src/core/activity.js';
-import { terrainOnPlane, pointAt, liftField, liftAt, warpS, mergeBands, terrainSetup, loopPoint } from '../src/core/terrain.js';
+import { terrainOnPlane, pointAt, liftField, liftAt, warpS, mergeBands, terrainSetup, loopPoint, hullPoint, surfaceAt } from '../src/core/terrain.js';
 import { v, sub, dot, cross, normalize, lerp } from '../src/core/vec.js';
 
 const base = { mAngle: [45, 45, 45], mDist: [550, 359, 634], layerCount: 3, fDist: 170, frameW: 60, frameH: 40 };
@@ -187,6 +187,29 @@ test('行走环线 loopPoint: 全程在安全区 footprint 内, 闭合, 脚贴�
   }
   const p0 = loopPoint(m, 0).point, p1 = loopPoint(m, 0.999999).point;
   assert(Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z) < 1e-3, '环线应闭合 (t→1 回到 t=0)');
+});
+
+test('无规则游走 hullPoint: 任意随机数 → 落点在安全区内, 脚贴地形(与 surfaceAt 同源)', () => {
+  const { regs, basePtsOf, fpOf } = setup();
+  const g = terrainOnPlane(regs[0].points, basePtsOf(0), fpOf(0));
+  const m = g.meta;
+  const inHull2 = (a, b) => {
+    let sign = 0;
+    for (let i = 0; i < m.hull2.length; i++) {
+      const p = m.hull2[i], q = m.hull2[(i + 1) % m.hull2.length];
+      const cr = (q.a - p.a) * (b - p.b) - (q.b - p.b) * (a - p.a);
+      if (Math.abs(cr) < 1e-9) continue;
+      if (sign === 0) sign = Math.sign(cr); else if (Math.sign(cr) !== sign) return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < 60; i++) {                              // 一批伪随机三元组(确定性遍历)
+    const r1 = (i * 0.137) % 1, r2 = (i * 0.611 + 0.2) % 1, r3 = (i * 0.913 + 0.5) % 1;
+    const hp = hullPoint(m, r1, r2, r3);
+    assert(inHull2(hp.a, hp.b), `航点 #${i} 应在安全区内`);
+    const sp = surfaceAt(m, hp.a, hp.b);                       // hullPoint 的落点应=surfaceAt(脚贴地形, 同源)
+    assert(Math.hypot(sp.x - hp.point.x, sp.y - hp.point.y, sp.z - hp.point.z) < 1e-9, '落点应与 surfaceAt 一致');
+  }
 });
 
 test('ampRatio=0 → 全贴基面; pointAt 与 liftAt 一致', () => {

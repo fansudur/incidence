@@ -11,3 +11,6 @@ desktop.ini
 *.bmp
 *.mp4
 *.exr
+
+# 预设导出(个人配置, 固化默认值后即丢, 不入库)
+incidence-preset-*.json

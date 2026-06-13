@@ -300,6 +300,39 @@ export function loopPoint(meta, t, shrink = 0.55) {
   return { point: pointAt(meta, 0.5, 0.5), perimeter: per }; // 数值兜底(浮点累计误差走到段外)
 }
 
+// 参数坐标 (a,b)(基面标架, 单位=世界距离) → 地表 3D 点(贴地形)。游走在 (a,b) 里推进, 每帧调它落地。
+export function surfaceAt(meta, a, b) {
+  const base = {
+    x: meta.pa.x + meta.e1.x * a + meta.e2.x * b,
+    y: meta.pa.y + meta.e1.y * a + meta.e2.y * b,
+    z: meta.pa.z + meta.e1.z * a + meta.e2.z * b,
+  };
+  return v(base.x, base.y + liftAt(meta, base).lift, base.z);
+}
+
+// 安全区内部随机点(确定性: 由 3 个 [0,1) 随机数定)。收缩凸包→质心三角扇→按面积权重选三角→重心采样
+// → 始终落在安全区内(无规则游走的航点用)。返回 { point(地表3D), a, b(参数坐标) }。
+export function hullPoint(meta, r1, r2, r3, shrink = 0.55) {
+  const h = meta.hull2;
+  let ca = 0, cb = 0;
+  for (const q of h) { ca += q.a; cb += q.b; }
+  ca /= h.length; cb /= h.length;
+  const pts = h.map((q) => ({ a: ca + (q.a - ca) * shrink, b: cb + (q.b - cb) * shrink }));
+  const tris = []; let total = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const area = Math.abs((p.a - ca) * (q.b - cb) - (q.a - ca) * (p.b - cb)) / 2;
+    tris.push({ p, q, area }); total += area;
+  }
+  let pick = (((r1 % 1) + 1) % 1) * total, tri = tris[tris.length - 1];
+  for (const t of tris) { if (pick <= t.area) { tri = t; break; } pick -= t.area; }
+  let s = (((r2 % 1) + 1) % 1), u = (((r3 % 1) + 1) % 1);
+  if (s + u > 1) { s = 1 - s; u = 1 - u; }                 // 折回三角形内 → 均匀重心采样
+  const a = ca + s * (tri.p.a - ca) + u * (tri.q.a - ca);
+  const b = cb + s * (tri.p.b - cb) + u * (tri.q.b - cb);
+  return { point: surfaceAt(meta, a, b), a, b };
+}
+
 // 表面点采样: 归一化 (u,w)∈0..1 → 基面点 + 抬升 (人物落点/行走路径用, 与生成同一函数)
 export function pointAt(meta, u, w) {
   const a = meta.minA + meta.sa * u, b = meta.minB + meta.sb * w;

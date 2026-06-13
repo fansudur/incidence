@@ -192,6 +192,14 @@ export function buildFigure(foot, up, height, colorHex) {
     armL.hip.rotation.x = -0.35 * s; armR.hip.rotation.x = 0.35 * s;      // 臂与对侧腿协同
     armL.knee.rotation.x = 0.25; armR.knee.rotation.x = 0.25;             // 肘微屈
   };
+  // 交谈姿(相遇时): 站立(腿踩地不动) + 双臂比划(右臂为主、左臂小幅), 由时间 t 驱动 → 有肢体动作
+  g.userData.talk = (t) => {
+    pelvis.position.y = hipY;
+    placeLeg(legL, 0.3, 0); placeLeg(legR, 0.3, 0);
+    const a = Math.sin(t * 3.0), b = Math.sin(t * 2.3 + 1.0);
+    armR.hip.rotation.x = -0.5 - 0.35 * a; armR.knee.rotation.x = 0.9 + 0.45 * a; armR.hip.rotation.z = -0.16; // 右手抬起比划
+    armL.hip.rotation.x = -0.12 + 0.18 * b; armL.knee.rotation.x = 0.45 + 0.22 * b; armL.hip.rotation.z = 0.12; // 左手小幅
+  };
   // 站立姿(静态人物): 双脚都踩在中点(略屈膝, 不飘不陷), 臂自然垂、肘微屈
   pelvis.position.y = hipY;
   placeLeg(legL, 0.3, 0); placeLeg(legR, 0.3, 0);     // ph=0.3 → zf=0,yf=0(支撑相中点)
@@ -209,17 +217,29 @@ export function buildFigure(foot, up, height, colorHex) {
 // 方位/高度/强度按层独立(zoneSunAz/El/Int[gap]); 远距(dist) + 按 radius 自动收窄的锥 → 光线近平行(像太阳)、
 // 锥外为零(关在这块区里, 不打到别区/镜面)。decay=0(无距离衰减, 全区等亮如日)、distance=0(无范围截断)、penumbra 柔边。
 // 灯本身不可见、不进几何遮挡。dist/spread/soft 三层共用。
-export function buildZoneSun(target, radius, p, gap = 0) {
+export function buildZoneSun(target, radius, p, gap = 0, placedPos = null) {
   const i = Math.min(gap, 2);                         // 三层独立, 超出按末层
   const az = THREE.MathUtils.degToRad(p.zoneSunAz[i]), el = THREE.MathUtils.degToRad(p.zoneSunEl[i]);
   const up = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)); // 黄区→该层太阳
   const dist = Math.max(20, p.zoneSunDist ?? 120);
   const half = Math.min(Math.PI / 2 - 0.01, Math.atan(radius / dist) * (p.zoneSunSpread ?? 1.4)); // 锥半角 = 刚好罩住黄区 × 余量
   const grp = new THREE.Group();
+  const tgt = new THREE.Object3D(); tgt.position.copy(target); grp.add(tgt); // 瞄准点=黄区中心(固定, 不随灯移动)
+  const rig = new THREE.Group();                      // 灯+标记 的可拖拽组(target 不在其内 → 拖灯时仍瞄黄区)
+  rig.userData.dragId = 'zonesun-' + gap;
+  rig.position.copy(placedPos || new THREE.Vector3().copy(target).addScaledVector(up, dist)); // 拖放存档优先, 否则按方位/高度/灯距自动摆
   const light = new THREE.SpotLight(0xffffff, p.zoneSunInt[i], 0, half, p.zoneSunSoft ?? 0.6, 0);
-  light.position.copy(target).addScaledVector(up, dist);
-  const tgt = new THREE.Object3D(); tgt.position.copy(target);
-  grp.add(light); grp.add(tgt); light.target = tgt;
+  light.target = tgt; rig.add(light);                 // 灯在 rig 原点; 移 rig=移灯, 仍瞄固定 tgt
+  const marker = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.18 + 0.06, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd24a })); // 太阳色小球: 标出灯位(仅编辑时显示, 不进最终成像)
+  marker.userData.isZoneSunMarker = true;
+  rig.add(marker);
+  const end = new THREE.Vector3().copy(target).sub(rig.position);           // 灯→黄区 的连线(rig 本地坐标)
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), end]),
+    new THREE.LineBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.4 })); // 指明这盏灯照哪块、从哪打来
+  line.userData.isZoneSunMarker = true;
+  rig.add(line);
+  grp.add(rig);
   return grp;
 }
 
