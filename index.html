@@ -86,6 +86,7 @@ let figureFixedFoot = null, lastFoot = null; // 结构性穿越: 固定模式钉
 const placed = {}; // 拖拽编辑存档: dragId → {x,y,z} (root 局部坐标); 重建后由 worldView 重新套用
 let walkHandles = [];        // 行走句柄 [{gap,obj,meta,t,last}] — 每层一人各走各的环线
 const walkPhase = {};        // gap → 环线参数 t (跨 rebuild 保持, 行走不因重建跳相位)
+const walkYaw = {};          // gap → 行走朝向 yaw (跨 rebuild 保持, 停走重建后不回弹到默认朝向)
 
 const editor = createEditorDrag({ // 坐标轴手柄+自由体拖拽; pt 经闭包延迟取值(两子系统互相引用)
   scene, domElement: renderer.domElement, camera: persp, controls, params, viewState, mv, placed,
@@ -102,7 +103,11 @@ function rebuild() {
   }
   const { group, bugLayer, foot, figures } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
   if (foot) lastFoot = foot;
-  walkHandles = (figures || []).map(f => ({ ...f, t: walkPhase[f.gap] ?? (f.gap * 0.37) % 1, last: null })); // 相位跨重建保持; 初相错开免三人同步
+  walkHandles = (figures || []).map(f => {              // 相位+朝向跨重建保持(初相错开免三人同步)
+    const yaw = walkYaw[f.gap];
+    if (yaw !== undefined) f.obj.userData.setHeading?.(yaw); // 复原行走朝向: 否则停走重建后人转回默认朝向(+Z)
+    return { ...f, t: walkPhase[f.gap] ?? (f.gap * 0.37) % 1, yaw, last: null };
+  });
   worldGroup = group;
   editor.reattach(worldGroup);
   worldGroup.position.y = viewState.lift; // 抬高整体模型, 脱离地面网格
@@ -312,6 +317,7 @@ function animate() {
           let d = tgt - cur; d = Math.atan2(Math.sin(d), Math.cos(d));
           h.yaw = cur + d * Math.min(1, 12 * dt);
           h.obj.userData.setHeading?.(h.yaw);
+          walkYaw[h.gap] = h.yaw;                              // 持久化朝向 → 停走重建后复原
         }
       }
       const stride = h.obj.userData.strideLen || 50;            // 步态相位 = 累计走过距离 / 步幅(初相按层错开)

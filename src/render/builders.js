@@ -114,9 +114,23 @@ export function buildTerrain(grid, opacity = 1, lowHex = 0x5f5a4e, highHex = 0xd
   }));
 }
 
-// 占位人形 (关节骨架: 躯干+头+两臂两腿, 各肢为刚体网格挂在关节枢轴下)。脚立在 foot, 沿 up 朝向(默认世界竖直=重力)。
+// 两骨 IK(矢状面): 给定脚相对髋枢轴的位移(zf 前后, vDown 向下距离)与大小腿长 → 髋/膝绕 X 旋转角。
+// 几何约定: 关节 0 角=肢向正下(-Y); 绕 X 正转令末端朝 -Z(故下方用 -zf 喂入)。膝朝前屈(髋角取 γ−α)。
+function legIK(zf, vDown, L1, L2) {
+  const h = -zf;                                     // 水平分量(与旋转方向匹配)
+  let d = Math.hypot(h, vDown);
+  d = Math.max(Math.abs(L1 - L2) + 1e-4, Math.min(L1 + L2 - 1e-4, d)); // 夹到可达范围
+  const clamp = (c) => Math.acos(Math.min(1, Math.max(-1, c)));
+  const gamma = Math.atan2(h, vDown);                // 目标方向相对正下的夹角
+  const alpha = clamp((L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)); // 髋: 大腿与髋→脚连线夹角
+  const knee = clamp((L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2)); // 膝内角
+  return { hip: gamma - alpha, knee: Math.PI - knee };
+}
+
+// 占位人形 (关节骨架 + 脚部IK): 躯干/头/两臂(FK摆)/两腿(IK踩地)/小脚掌。脚立在 foot, 沿 up 朝向。
 // 走动 = 只转关节枢轴(不重建几何) → 拓扑不变, 动态PT 走 bvh.refit 快路径(与整体移动同级)。
-// 暴露 userData.gait(相位→摆肢)/ setHeading(朝向travel) / strideLen(步幅, 行走相位换算用)。
+// 比例使腿够得着地(腿展>髋高→站立略屈膝, 自然); 行走时脚在支撑相贴地、摆动相抬起划弧 → 不再飘/陷。
+// 暴露 userData.gait(相位)/ setHeading(yaw) / strideLen。
 export function buildFigure(foot, up, height, colorHex) {
   const H = height;
   const g = new THREE.Group();
@@ -124,45 +138,66 @@ export function buildFigure(foot, up, height, colorHex) {
   const facing = new THREE.Group();                  // 朝向枢轴(yaw); g 只管 位置+up, 朝向独立转, 不与 up 四元数打架
   g.add(facing);
   const mat = new THREE.MeshStandardMaterial({ color: colorHex ?? 0xcfc7ba, roughness: 0.7, metalness: 0.0 });
-  const cap = (rad, len) => new THREE.Mesh(new THREE.CapsuleGeometry(rad, len, 4, 8), mat); // 低分段: PT 友好
+  const cap = (rad, len) => new THREE.Mesh(new THREE.CapsuleGeometry(rad, Math.max(0.001, len), 4, 8), mat); // 低分段: PT 友好
 
-  // 比例(以 H 为基准, 脚≈y0): 髋 0.50 / 肩 0.82 / 头心 0.92
-  const hipY = 0.50 * H, shoulderY = 0.82 * H;
-  const upperLeg = 0.25 * H, lowerLeg = 0.23 * H, upperArm = 0.20 * H, lowerArm = 0.18 * H;
-  const hipHalf = 0.085 * H, shoulderHalf = 0.135 * H;
+  // 比例(以 H 为基准, 脚≈y0): 髋 0.46 / 肩 0.82 / 头心 0.90; 腿展 0.52 > 髋高 0.46 → 站立时略屈膝(可踩地)
+  const hipY = 0.46 * H, shoulderY = 0.82 * H;
+  const upperLeg = 0.27 * H, lowerLeg = 0.25 * H, upperArm = 0.18 * H, lowerArm = 0.16 * H;
+  const hipHalf = 0.085 * H, shoulderHalf = 0.13 * H, footLen = 0.13 * H;
 
   const pelvis = new THREE.Group(); pelvis.position.y = hipY; facing.add(pelvis);
-  const torso = cap(0.105 * H, (shoulderY - hipY) - 0.105 * H); // 躯干: 髋→肩
+  const torso = cap(0.10 * H, (shoulderY - hipY) - 0.16 * H); // 躯干: 髋→肩
   torso.position.y = (shoulderY - hipY) / 2; pelvis.add(torso);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.085 * H, 12, 10), mat);
   head.position.y = (shoulderY - hipY) + 0.12 * H; pelvis.add(head);
 
   // 肢: 枢轴在关节处, 子网格中心向下偏移半段 → 绕枢轴 X 轴转=前后摆; 末端再挂下一段枢轴
-  const limb = (parent, x, topLen, botLen, rad) => {
+  const limb = (parent, x, topLen, botLen, rad, withFoot) => {
     const hip = new THREE.Group(); hip.position.set(x, 0, 0); parent.add(hip);
     const up1 = cap(rad, topLen - 2 * rad); up1.position.y = -topLen / 2; hip.add(up1);
     const knee = new THREE.Group(); knee.position.y = -topLen; hip.add(knee);
-    const lo1 = cap(rad * 0.9, botLen - 2 * rad); lo1.position.y = -botLen / 2; knee.add(lo1);
-    return { hip, knee };
+    const lo1 = cap(rad * 0.85, botLen - 2 * rad); lo1.position.y = -botLen / 2; knee.add(lo1);
+    let ankle = null;
+    if (withFoot) {                                  // 脚掌: 挂踝处, 反向旋转保持水平(踩平地面)
+      ankle = new THREE.Group(); ankle.position.y = -botLen; knee.add(ankle);
+      const fb = new THREE.Mesh(new THREE.BoxGeometry(rad * 1.8, rad * 0.9, footLen), mat);
+      fb.position.set(0, -rad * 0.45, footLen * 0.28); ankle.add(fb); // 脚向前伸
+    }
+    return { hip, knee, ankle };
   };
-  const legL = limb(pelvis, -hipHalf, upperLeg, lowerLeg, 0.05 * H);
-  const legR = limb(pelvis, hipHalf, upperLeg, lowerLeg, 0.05 * H);
+  const legL = limb(pelvis, -hipHalf, upperLeg, lowerLeg, 0.05 * H, true);
+  const legR = limb(pelvis, hipHalf, upperLeg, lowerLeg, 0.05 * H, true);
   const shoulders = new THREE.Group(); shoulders.position.y = shoulderY - hipY; pelvis.add(shoulders);
-  const armL = limb(shoulders, -shoulderHalf, upperArm, lowerArm, 0.04 * H);
-  const armR = limb(shoulders, shoulderHalf, upperArm, lowerArm, 0.04 * H);
+  const armL = limb(shoulders, -shoulderHalf, upperArm, lowerArm, 0.035 * H, false);
+  const armR = limb(shoulders, shoulderHalf, upperArm, lowerArm, 0.035 * H, false);
   armL.hip.rotation.z = 0.08; armR.hip.rotation.z = -0.08; // 手臂微外张(自然垂)
 
-  // 步态: 髋前后摆(左右反相), 膝在摆腿期屈曲; 臂与对侧腿同摆; 躯干轻微竖向起伏(2倍频)
-  g.userData.gait = (p) => {
-    const a = Math.PI * 2 * p, s = Math.sin(a);
-    legL.hip.rotation.x = 0.45 * s;  legR.hip.rotation.x = -0.45 * s;
-    legL.knee.rotation.x = -0.6 * Math.max(0, -Math.sin(a - 0.6));   // 后摆收腿屈膝
-    legR.knee.rotation.x = -0.6 * Math.max(0, -Math.sin(a + Math.PI - 0.6));
-    armL.hip.rotation.x = -0.40 * s; armR.hip.rotation.x = 0.40 * s; // 对侧协同
-    pelvis.position.y = hipY - 0.018 * H * (1 + Math.cos(2 * a));    // 起伏(落脚最低)
+  const stride = 0.40 * H, half = stride / 2, swingLift = 0.10 * H;
+  const footDrop = 0.045 * H;                         // 踝到脚掌底的高差 → 支撑相踝抬到此高度, 脚掌底正好落 y0
+  // 一条腿: 相位 ph∈[0,1) → 脚(踝)目标(前后 zf, 高 yf) → IK 解髋膝 → 踝反旋保持脚掌水平
+  const placeLeg = (leg, ph, bob) => {
+    let zf, yf;
+    if (ph < 0.6) { zf = half - (ph / 0.6) * stride; yf = footDrop; }     // 支撑相: 脚掌贴地, 由前划到后
+    else { const t = (ph - 0.6) / 0.4; zf = -half + t * stride; yf = footDrop + swingLift * Math.sin(Math.PI * t); } // 摆动相: 抬脚划弧前送
+    const sol = legIK(zf, hipY + bob - yf, upperLeg, lowerLeg);
+    leg.hip.rotation.x = sol.hip; leg.knee.rotation.x = sol.knee;
+    if (leg.ankle) leg.ankle.rotation.x = -(sol.hip + sol.knee);          // 脚掌保持水平
   };
+  g.userData.gait = (p) => {
+    const bob = -0.015 * H * (1 + Math.cos(2 * Math.PI * 2 * p));         // 躯干轻微起伏(双脚支撑时最高)
+    pelvis.position.y = hipY + bob;
+    placeLeg(legL, p % 1, bob);
+    placeLeg(legR, (p + 0.5) % 1, bob);                                   // 左右反相半步
+    const s = Math.sin(2 * Math.PI * p);
+    armL.hip.rotation.x = -0.35 * s; armR.hip.rotation.x = 0.35 * s;      // 臂与对侧腿协同
+    armL.knee.rotation.x = 0.25; armR.knee.rotation.x = 0.25;             // 肘微屈
+  };
+  // 站立姿(静态人物): 双脚都踩在中点(略屈膝, 不飘不陷), 臂自然垂、肘微屈
+  pelvis.position.y = hipY;
+  placeLeg(legL, 0.3, 0); placeLeg(legR, 0.3, 0);     // ph=0.3 → zf=0,yf=0(支撑相中点)
+  armL.hip.rotation.x = 0; armR.hip.rotation.x = 0; armL.knee.rotation.x = 0.2; armR.knee.rotation.x = 0.2;
   g.userData.setHeading = (yaw) => { facing.rotation.y = yaw; };
-  g.userData.strideLen = 0.62 * H;                  // 一步幅 ≈ 0.62 身高 → 行走相位 = 走过距离/步幅
+  g.userData.strideLen = stride;                     // 行走相位 = 走过距离 / 步幅
 
   g.position.copy(foot);
   if (up && Math.abs(up.y - 1) > 1e-6)               // up≠世界Y 时才旋转(竖直站立默认不转)
