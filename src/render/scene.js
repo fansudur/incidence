@@ -57,8 +57,7 @@ export function createScene(params) {
     const h = ortho.top; ortho.left = -h * a; ortho.right = h * a; ortho.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   };
-  addEventListener('resize', onResize);
-  new ResizeObserver(onResize).observe(document.body); // 防加载竞态: body 一拿到尺寸就校正
+  new ResizeObserver(onResize).observe(document.body); // 唯一 resize 通道: body height:100% 跟随视口, 且初始拿到尺寸即校正(防加载竞态)
 
   const useCamera = (cam) => { state.camera = cam; controls.object = cam; controls.update(); };
 
