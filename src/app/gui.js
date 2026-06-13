@@ -7,6 +7,7 @@ export function buildGui(params, schema, onChange, title = '装置参数 (原始
   const ctrls = {};
   for (const grp of schema) {
     const f = gui.addFolder(grp.folder);
+    if (grp.collapsed) f.close();                    // 庞杂/低频 folder 默认折叠, 侧边栏不再一屏铺满
     for (const it of grp.items) {
       if (it.type === 'vec3') {                       // 数组 → 3 个滑块
         for (let i = 0; i < 3; i++) f.add(params[it.key], String(i), it.min, it.max, it.step).name(it.sub[i]).onChange(onChange);

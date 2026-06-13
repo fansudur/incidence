@@ -210,7 +210,10 @@ function applyEnv() {
   updateEnv(params);
   pt.refreshEnv();
 }
-for (const k of ['sunAz', 'sunEl', 'sunIntensity', 'skyTop', 'skyHorizon']) ctrls[k]?.onChange(applyEnv);
+for (const k of ['sunAz', 'sunEl', 'sunIntensity', 'skyTop', 'skyHorizon', 'skyEnv']) ctrls[k]?.onChange(applyEnv); // 全局天空/太阳: 不动几何
+// 分区太阳开关: 关全局方向光(applyEnv 内据 zoneSun 置 0) + 重建生成/移除各黄区聚光灯
+// (每层 az/el/强度 与 dist/spread/soft 走 schema 默认 onChange=rebuild, 改即重摆聚光灯)
+ctrls.zoneSun?.onChange(() => { applyEnv(); rebuild(); });
 
 // 结构性穿越(作者想法, 见《项目档案》开放方向5): 开启=把人钉在当前位置(世界坐标), 关闭=恢复跟随安全区。
 // 钉住后拖 镜距/取景框 让分层扫过他 → Σ 看到 单见→重影(红区)→换层, 人全程未动。
@@ -294,10 +297,23 @@ function animate() {
     expandCtrl.updateDisplay(); rebuild();
   }
   if (params.figureWalk && walkHandles.length) { // 行走: 每层一人各走各的环线(逐帧移动, 不重建), 脚贴各自地形
+    const step = ((params.walkSpeed ?? 60) / U) * dt;            // 本帧走过的场景距离
     for (const h of walkHandles) {
       const { point, perimeter } = loopPoint(h.meta, h.t);
-      h.t = (h.t + ((params.walkSpeed ?? 60) / U) * dt / Math.max(1e-6, perimeter)) % 1; // 同速 → 深层圈大走得久(物理一致)
+      h.t = (h.t + step / Math.max(1e-6, perimeter)) % 1;        // 同速 → 深层圈大走得久(物理一致)
       walkPhase[h.gap] = h.t;
+      if (h.last) {                                              // 朝向: 顺位移方向(平滑转, 防低速抖动)
+        const dx = point.x - h.last.x, dz = point.z - h.last.z;
+        if (dx * dx + dz * dz > 1e-10) {
+          const tgt = Math.atan2(dx, dz), cur = h.yaw ?? tgt;   // 人形默认朝 +Z(髋绕X摆=前后在Z) → yaw=atan2(dx,dz)
+          let d = tgt - cur; d = Math.atan2(Math.sin(d), Math.cos(d));
+          h.yaw = cur + d * Math.min(1, 12 * dt);
+          h.obj.userData.setHeading?.(h.yaw);
+        }
+      }
+      const stride = h.obj.userData.strideLen || 50;            // 步态相位 = 累计走过距离 / 步幅(初相按层错开)
+      h.gaitPhase = (h.gaitPhase ?? h.gap * 0.3) + step / stride;
+      h.obj.userData.gait?.(h.gaitPhase);
       h.obj.position.set(point.x, point.y, point.z);
       h.last = { x: point.x, y: point.y, z: point.z };
     }

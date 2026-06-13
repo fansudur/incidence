@@ -42,10 +42,12 @@ export function createScene(params) {
   function updateEnv(p) {
     const az = THREE.MathUtils.degToRad(p.sunAz), el = THREE.MathUtils.degToRad(p.sunEl);
     sun.position.set(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)).multiplyScalar(80);
-    sun.intensity = p.sunIntensity;
+    sun.intensity = p.zoneSun ? 0 : p.sunIntensity; // 分区太阳模式: 全局方向光让位给每黄区的约束聚光灯
     sky.topColor.set(p.skyTop);
     sky.bottomColor.set(p.skyHorizon);
     sky.update(); // 重生成 equirect 数据 (PT 端需再 updateEnvironment)
+    scene.environmentIntensity = p.skyEnv === false ? 0 : 1; // 环境补光 开/关: PT 读 scene.environmentIntensity(每次 updateEnvironment 刷新, 不受采样图缓存影响)
+    scene.background = p.skyEnv === false ? null : sky;      // 关=纯黑宇宙背景; 开=渐变天空。environment 始终保留 sky 对象(避免 env=null 老坑)
   }
   if (params) updateEnv(params); // 初始即按 params 设好
 

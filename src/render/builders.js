@@ -114,23 +114,78 @@ export function buildTerrain(grid, opacity = 1, lowHex = 0x5f5a4e, highHex = 0xd
   }));
 }
 
-// 占位人形 (低模: 胶囊身 + 球头): 脚立在 foot, 沿 up 朝向 (默认世界竖直=重力方向)。
-// height = 身高(场景单位)。先验证站位/受光/反射, 之后再换精模或加走动。
+// 占位人形 (关节骨架: 躯干+头+两臂两腿, 各肢为刚体网格挂在关节枢轴下)。脚立在 foot, 沿 up 朝向(默认世界竖直=重力)。
+// 走动 = 只转关节枢轴(不重建几何) → 拓扑不变, 动态PT 走 bvh.refit 快路径(与整体移动同级)。
+// 暴露 userData.gait(相位→摆肢)/ setHeading(朝向travel) / strideLen(步幅, 行走相位换算用)。
 export function buildFigure(foot, up, height, colorHex) {
+  const H = height;
   const g = new THREE.Group();
   g.userData.dragId = 'figure';                      // 拖拽编辑的根标识
-  const r = height * 0.12, bodyLen = height * 0.56; // 胶囊半径 / 直段长
-  const mat = new THREE.MeshStandardMaterial({ color: colorHex ?? 0xcfc7ba, roughness: 0.75, metalness: 0.0 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(r, bodyLen, 6, 14), mat);
-  body.position.y = r + bodyLen / 2;                 // 胶囊几何中心居中 → 底(脚)落在 y=0
-  g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(height * 0.13, 18, 12), mat);
-  head.position.y = r + bodyLen + height * 0.07;
-  g.add(head);
+  const facing = new THREE.Group();                  // 朝向枢轴(yaw); g 只管 位置+up, 朝向独立转, 不与 up 四元数打架
+  g.add(facing);
+  const mat = new THREE.MeshStandardMaterial({ color: colorHex ?? 0xcfc7ba, roughness: 0.7, metalness: 0.0 });
+  const cap = (rad, len) => new THREE.Mesh(new THREE.CapsuleGeometry(rad, len, 4, 8), mat); // 低分段: PT 友好
+
+  // 比例(以 H 为基准, 脚≈y0): 髋 0.50 / 肩 0.82 / 头心 0.92
+  const hipY = 0.50 * H, shoulderY = 0.82 * H;
+  const upperLeg = 0.25 * H, lowerLeg = 0.23 * H, upperArm = 0.20 * H, lowerArm = 0.18 * H;
+  const hipHalf = 0.085 * H, shoulderHalf = 0.135 * H;
+
+  const pelvis = new THREE.Group(); pelvis.position.y = hipY; facing.add(pelvis);
+  const torso = cap(0.105 * H, (shoulderY - hipY) - 0.105 * H); // 躯干: 髋→肩
+  torso.position.y = (shoulderY - hipY) / 2; pelvis.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.085 * H, 12, 10), mat);
+  head.position.y = (shoulderY - hipY) + 0.12 * H; pelvis.add(head);
+
+  // 肢: 枢轴在关节处, 子网格中心向下偏移半段 → 绕枢轴 X 轴转=前后摆; 末端再挂下一段枢轴
+  const limb = (parent, x, topLen, botLen, rad) => {
+    const hip = new THREE.Group(); hip.position.set(x, 0, 0); parent.add(hip);
+    const up1 = cap(rad, topLen - 2 * rad); up1.position.y = -topLen / 2; hip.add(up1);
+    const knee = new THREE.Group(); knee.position.y = -topLen; hip.add(knee);
+    const lo1 = cap(rad * 0.9, botLen - 2 * rad); lo1.position.y = -botLen / 2; knee.add(lo1);
+    return { hip, knee };
+  };
+  const legL = limb(pelvis, -hipHalf, upperLeg, lowerLeg, 0.05 * H);
+  const legR = limb(pelvis, hipHalf, upperLeg, lowerLeg, 0.05 * H);
+  const shoulders = new THREE.Group(); shoulders.position.y = shoulderY - hipY; pelvis.add(shoulders);
+  const armL = limb(shoulders, -shoulderHalf, upperArm, lowerArm, 0.04 * H);
+  const armR = limb(shoulders, shoulderHalf, upperArm, lowerArm, 0.04 * H);
+  armL.hip.rotation.z = 0.08; armR.hip.rotation.z = -0.08; // 手臂微外张(自然垂)
+
+  // 步态: 髋前后摆(左右反相), 膝在摆腿期屈曲; 臂与对侧腿同摆; 躯干轻微竖向起伏(2倍频)
+  g.userData.gait = (p) => {
+    const a = Math.PI * 2 * p, s = Math.sin(a);
+    legL.hip.rotation.x = 0.45 * s;  legR.hip.rotation.x = -0.45 * s;
+    legL.knee.rotation.x = -0.6 * Math.max(0, -Math.sin(a - 0.6));   // 后摆收腿屈膝
+    legR.knee.rotation.x = -0.6 * Math.max(0, -Math.sin(a + Math.PI - 0.6));
+    armL.hip.rotation.x = -0.40 * s; armR.hip.rotation.x = 0.40 * s; // 对侧协同
+    pelvis.position.y = hipY - 0.018 * H * (1 + Math.cos(2 * a));    // 起伏(落脚最低)
+  };
+  g.userData.setHeading = (yaw) => { facing.rotation.y = yaw; };
+  g.userData.strideLen = 0.62 * H;                  // 一步幅 ≈ 0.62 身高 → 行走相位 = 走过距离/步幅
+
   g.position.copy(foot);
   if (up && Math.abs(up.y - 1) > 1e-6)               // up≠世界Y 时才旋转(竖直站立默认不转)
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up.clone().normalize());
   return g;
+}
+
+// 分区太阳: 一盏聚光灯, 只照一块黄区(gap=层号)。target=黄区表面中心, radius=黄区半径(场景单位)。
+// 方位/高度/强度按层独立(zoneSunAz/El/Int[gap]); 远距(dist) + 按 radius 自动收窄的锥 → 光线近平行(像太阳)、
+// 锥外为零(关在这块区里, 不打到别区/镜面)。decay=0(无距离衰减, 全区等亮如日)、distance=0(无范围截断)、penumbra 柔边。
+// 灯本身不可见、不进几何遮挡。dist/spread/soft 三层共用。
+export function buildZoneSun(target, radius, p, gap = 0) {
+  const i = Math.min(gap, 2);                         // 三层独立, 超出按末层
+  const az = THREE.MathUtils.degToRad(p.zoneSunAz[i]), el = THREE.MathUtils.degToRad(p.zoneSunEl[i]);
+  const up = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)); // 黄区→该层太阳
+  const dist = Math.max(20, p.zoneSunDist ?? 120);
+  const half = Math.min(Math.PI / 2 - 0.01, Math.atan(radius / dist) * (p.zoneSunSpread ?? 1.4)); // 锥半角 = 刚好罩住黄区 × 余量
+  const grp = new THREE.Group();
+  const light = new THREE.SpotLight(0xffffff, p.zoneSunInt[i], 0, half, p.zoneSunSoft ?? 0.6, 0);
+  light.position.copy(target).addScaledVector(up, dist);
+  const tgt = new THREE.Object3D(); tgt.position.copy(target);
+  grp.add(light); grp.add(tgt); light.target = tgt;
+  return grp;
 }
 
 // 九宫格投影网格: sections = 各截面的 V3 网格点(行主序), N = 每边点数(=格数+1)。

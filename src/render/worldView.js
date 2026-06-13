@@ -5,7 +5,7 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { traceFrustum, projectGrid, U } from '../core/frustum.js';
 import { safeRegions, bugRegions, sceneryAnchors, splitFloorByNextCone, groundSection, planeSection, centroid, vEdges } from '../core/activity.js';
 import { terrainOnPlane, liftAt, terrainSetup } from '../core/terrain.js';
-import { makeLabel, buildSphere, buildFrustumSolid, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure } from './builders.js';
+import { makeLabel, buildSphere, buildFrustumSolid, buildMirror, buildProjGrid, buildScenery, buildWall, buildReflector, buildFloor, buildGround, buildTerrain, buildFigure, buildZoneSun } from './builders.js';
 import { SAFE_COLOR, SAFE_EDGE_COLOR, BUG_COLOR, BUG_EDGE_COLOR } from './materials.js';
 
 // 整色混合 (a→b 按 t): 地形按层着色 / 人物按层染色 共用
@@ -149,6 +149,22 @@ function buildSingleWorld(params, base = 0, runtime = {}) {
       root.add(f);
       figures.push({ gap: r.gap, obj: f, meta: m });
       if (r.gap === 0) figFoot = foot;
+    }
+  }
+
+  // 分区太阳(作者方案): 每个有地形的黄区一盏约束聚光灯, 光只落自己那块(锥外为零→不漏到别区/镜面)。
+  // 灯方向沿全局太阳方位/高度角; 全局方向光由 scene.js 在此模式下置 0。仅 PT 里看真实效果(灯不可见、不遮挡)。
+  if (params.zoneSun && !bug && mcPlain.length >= 2) {
+    for (const r of safeRegions(mcPlain, data.seed)) {
+      const tr = terrains.find((t) => t.gap === r.gap);
+      if (!tr) continue;
+      const m = tr.grid.meta;
+      const sec = planeSection(r.points, m.pa, m.n);
+      if (!sec) continue;
+      const bp = centroid(sec);
+      const surf = new THREE.Vector3(bp.x, bp.y + liftAt(m, bp).lift, bp.z);   // 黄区表面中心 = 灯对准点
+      let rad = 0; for (const q of sec) rad = Math.max(rad, Math.hypot(q.x - bp.x, q.y - bp.y, q.z - bp.z)); // 黄区半径
+      root.add(buildZoneSun(surf, rad, params, r.gap));
     }
   }
 

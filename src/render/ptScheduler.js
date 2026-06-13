@@ -81,7 +81,11 @@ export function createPTScheduler({ renderer, scene, params, getCamera, getHidde
       pathTracer.bounces = params.ptBounces;
       pathTracer.reset();                        // samples 归 0, 用新设置重新干净累积
     },
-    refreshEnv() { if (pathTracer && ready) { pathTracer.updateLights(); pathTracer.updateEnvironment(); pathTracer.reset(); } },
+    refreshEnv() {
+      if (!(pathTracer && ready)) return;
+      pathTracer._previousEnvironment = null; // 强制重建环境重要性采样图: 天空贴图原地改色/改强度不换对象 → 否则 PT 仍用旧采样图("改色在PT里没反应"的根因, vendor 8799)
+      pathTracer.updateLights(); pathTracer.updateEnvironment(); pathTracer.reset();
+    },
     onCameraMoved() { if (params.pathTrace && pathTracer) pathTracer.updateCamera(); },      // 相机真动了才重置累积
     updateCameraNow() { if (params.pathTrace && pathTracer) pathTracer.updateCamera(); },    // 轻量摆位类(Σ眼视野)
     updateCameraIfReady() { if (params.pathTrace && pathTracer && ready) pathTracer.updateCamera(); }, // resize/退三视口重拍投影快照
