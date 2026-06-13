@@ -124,16 +124,17 @@ const warnEl = document.querySelector('#warn');
 let worldGroup = null, framed = false;
 let figureFixedFoot = null, lastFoot = null; // 结构性穿越: 固定模式钉住的脚点 / 最近一次计算的脚点(开启瞬间捕获)
 const placed = {}; // 拖拽编辑存档: dragId → {x,y,z} (root 局部坐标); 重建后由 worldView 重新套用
-let walkHandle = null, walkT = 0, lastWalkPos = null; // 行走: 人物/层1地形meta句柄 · 环线参数 · 最后落点(停走留位)
+let walkHandles = [];        // 行走句柄 [{gap,obj,meta,t,last}] — 每层一人各走各的环线
+const walkPhase = {};        // gap → 环线参数 t (跨 rebuild 保持, 行走不因重建跳相位)
 function rebuild() {
   if (worldGroup) {
     gizmo.detach();                              // 旧对象即将销毁; 重建后凭 selectedDragId 重新吸附
     scene.remove(worldGroup);
     worldGroup.traverse(o => { o.geometry?.dispose?.(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
   }
-  const { group, bugLayer, foot, figure, walkMeta } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
+  const { group, bugLayer, foot, figures } = buildAllWorlds(params, { fixedFoot: figureFixedFoot, placed }); // 视锥追迹建世界 → src/render/worldView.js
   if (foot) lastFoot = foot;
-  walkHandle = figure && walkMeta ? { figure, walkMeta } : null; // 行走句柄(层1地形隐藏或人物隐藏时不可走)
+  walkHandles = (figures || []).map(f => ({ ...f, t: walkPhase[f.gap] ?? (f.gap * 0.37) % 1, last: null })); // 相位跨重建保持; 初相错开免三人同步
   worldGroup = group;
   if (selectedDragId) worldGroup.traverse(o => { if (o.userData.dragId === selectedDragId) gizmo.attach(o); });
   worldGroup.position.y = viewState.lift; // 抬高整体模型, 脱离地面网格
@@ -272,9 +273,9 @@ ctrls.figureWalk?.onChange(v => {
   if (v) {
     if (params.pathTrace && !params.ptDynamic) { params.pathTrace = false; ctrls.pathTrace?.updateDisplay(); ptReady = false; }
     if (params.figureFixed) { params.figureFixed = false; ctrls.figureFixed?.updateDisplay(); figureFixedFoot = null; }
-    delete placed.figure;                                  // 行走接管位置
+    for (const h of walkHandles) delete placed['figure-' + h.gap]; // 行走接管全部人物位置
   } else {
-    if (lastWalkPos) placed.figure = { ...lastWalkPos };
+    for (const h of walkHandles) if (h.last) placed['figure-' + h.gap] = { ...h.last }; // 各自停在原地
     if (params.pathTrace && pathTracer) { // 定格: 恢复全分辨率与库默认节奏(500ms 渐显正好是"凝固感") → rebuild 后累积
       pathTracer.renderScale = params.ptScale;
       pathTracer.renderDelay = 100; pathTracer.minSamples = 5; pathTracer.fadeDuration = 500;
@@ -309,7 +310,10 @@ const multiCtrl = vf.add(viewState, 'multi').name('三视口 (主视口+顶+正)
 ctrls.pathTrace?.onChange(v => {
   if (v) {
     if (params.autoPlay) { params.autoPlay = false; ctrls.autoPlay?.updateDisplay(); }
-    if (params.figureWalk && !params.ptDynamic) { params.figureWalk = false; ctrls.figureWalk?.updateDisplay(); if (lastWalkPos) placed.figure = { ...lastWalkPos }; } // 非动态模式: 开PT=定格停走
+    if (params.figureWalk && !params.ptDynamic) { // 非动态模式: 开PT=定格停走(各自留位)
+      params.figureWalk = false; ctrls.figureWalk?.updateDisplay();
+      for (const h of walkHandles) if (h.last) placed['figure-' + h.gap] = { ...h.last };
+    }
     suppressScaffold();
   }
   rebuild();
@@ -407,11 +411,14 @@ function animate() {
     params.expand = Math.sin(clock.elapsedTime * 0.6) * 0.5 + 0.5;
     expandCtrl.updateDisplay(); rebuild();
   }
-  if (params.figureWalk && walkHandle) {       // 行走: 逐帧移动人物(不重建); 环线在层1安全区内, 脚贴地形
-    const { point, perimeter } = loopPoint(walkHandle.walkMeta, walkT);
-    walkT = (walkT + ((params.walkSpeed ?? 60) / U) * dt / Math.max(1e-6, perimeter)) % 1;
-    walkHandle.figure.position.set(point.x, point.y, point.z);
-    lastWalkPos = { x: point.x, y: point.y, z: point.z };
+  if (params.figureWalk && walkHandles.length) { // 行走: 每层一人各走各的环线(逐帧移动, 不重建), 脚贴各自地形
+    for (const h of walkHandles) {
+      const { point, perimeter } = loopPoint(h.meta, h.t);
+      h.t = (h.t + ((params.walkSpeed ?? 60) / U) * dt / Math.max(1e-6, perimeter)) % 1; // 同速 → 深层圈大走得久(物理一致)
+      walkPhase[h.gap] = h.t;
+      h.obj.position.set(point.x, point.y, point.z);
+      h.last = { x: point.x, y: point.y, z: point.z };
+    }
     if (params.pathTrace && params.ptDynamic && pathTracer && ptReady && !ptQueued) {
       // 动态PT: 拓扑没变只动了人 → setScene 内部走 GEOMETRY_ADJUSTED→bvh.refit(快路径)并重置累积
       // → 每帧 1 次采样 = 活的噪点画面(真实反射, 含二三层运动); 低分辨率保流畅
