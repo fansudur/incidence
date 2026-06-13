@@ -6,7 +6,8 @@ import { GradientEquirectTexture } from 'three-gpu-pathtracer'; // equirect 天�
 
 export function createScene(params) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const mobile = matchMedia('(max-width: 820px)').matches;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, mobile ? 1.5 : 2)); // 窄屏限 1.5: 省手机填充率/带宽
   renderer.setSize(innerWidth, innerHeight);
   document.body.appendChild(renderer.domElement);
 

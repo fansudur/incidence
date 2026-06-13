@@ -2,10 +2,11 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>∅ | UN</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #07090d; }
+  canvas { touch-action: none; display: block; } /* 手势全交给 OrbitControls/拖拽, 不让浏览器抢去滚动/缩放 */
   #info { /* 左上角项目标识: 符号 + 名字, 仅此而已(几何本身承载意义, 不需要文字解说) */
     position: fixed; left: 14px; top: 12px; z-index: 10;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -19,6 +20,11 @@
     color: #ff5ad0; text-shadow: 0 1px 2px #000; pointer-events: none; display: none; max-width: 60%;
   }
   /* 移动端: 侧边栏由 JS 默认收起; 标识两行不挡画面, 各端均显示 */
+  @media (max-width: 820px) {            /* 窄屏: 面板限宽可滚动 + 控件加大便于触摸 */
+    .lil-gui.root { --width: 84vw; max-width: 320px; max-height: 88vh; }
+    .lil-gui { --widget-height: 26px; --font-size: 12px; --input-font-size: 12px; }
+    #mark { font-size: 15px; } #markName { font-size: 10px; }
+  }
 </style>
 </head>
 <body>
@@ -64,6 +70,10 @@ import { setupPresets } from './src/app/presets.js';     // 预设存档/载入(
    ============================================================================ */
 
 const params = defaultParams(); // 初始参数(默认值)由 src/app/params.js 的 schema 生成
+// 移动端轻量回退: 路径追踪太吃手机 GPU(浮点纹理/带宽) → 默认改光栅 + 实时平面反射(Reflector); PT 留作高端机手动开。
+// 桌面端不受影响, 仍是作者固化的 PT 开场版。
+const isMobile = matchMedia('(max-width: 820px)').matches || (matchMedia('(pointer: coarse)').matches && innerWidth < 1024);
+if (isMobile) { params.pathTrace = false; params.realMirror = true; }
 
 let currentView = '透视';                                        // 单视口的当前视图预设
 const viewState = { lift: 4, multi: false, splitX: 0.62, splitY: 0.5, eyeFovScale: 1.0 }; // 模型升高 / 三视口 / 分隔比例 / Σ眼视野放宽(1=竖直正好等于F, >1=看到框外观影墙)
@@ -189,7 +199,7 @@ rebuild();
 // ---- GUI (从 src/app/params.js 的 schema 自动生成, 不再手写每个 gui.add) ----
 const { gui, ctrls } = buildGui(params, PARAM_SCHEMA, rebuild);
 const expandCtrl = ctrls.expand; // 动画循环里要 updateDisplay
-if (matchMedia('(max-width: 768px)').matches) gui.close(); // 移动端: 侧边栏默认收起(点标题可展开)
+if (isMobile) gui.close(); // 移动端: 侧边栏默认收起(点标题栏可展开/收起)
 
 // 路径追踪精度: 改这几项不必整场重建(分辨率/反弹实时改, 采样上限主循环直接读), 只重置累积续渲染 → 拖动即时生效
 for (const k of ['ptScale', 'ptBounces', 'ptSamples']) ctrls[k]?.onChange(() => pt.applyOpts());
@@ -292,8 +302,9 @@ function onAppResize() {
 }
 new ResizeObserver(onAppResize).observe(document.body); // 唯一 resize 通道(body height:100% 跟随视口, 含加载竞态); 不再叠 window resize 双触发
 
-// 默认进入 Σ·观影位 (路径追踪在 params 里默认开) — 落地即影院视角看合成反射画面
-setView('Σ眼');
+// 默认视角: 桌面=Σ·观影位(PT 默认开 → 落地即影院视角看合成反射画面);
+// 移动端=透视总览(无 PT, Σ眼望远会变成贴脸特写; 总览能看清整座镜面结构, 是更好的手机首屏)
+setView(isMobile ? '透视' : 'Σ眼');
 
 // ---- 主循环 ------------------------------------------------------------------
 const clock = new THREE.Clock();
